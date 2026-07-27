@@ -1,0 +1,23 @@
+[general]
+static=yes
+writeprotect=yes
+autofallthrough=yes
+
+[teamora-inbound]
+exten => ${SIP_DID},1,NoOp(Teamora inbound DID ${SIP_DID})
+ same => n,Set(CHANNEL(hangup_handler_push)=teamora-cleanup,s,1)
+ same => n,Stasis(teamora-voice,inbound,${EXTEN})
+ same => n,Hangup()
+
+[teamora-transfer]
+exten => support,1,NoOp(Transfer to Teamora support queue)
+ same => n,Queue(teamora-support,t,,,${OPERATOR_QUEUE_TIMEOUT})
+ same => n,Goto(teamora-no-operator,s,1)
+
+[teamora-no-operator]
+exten => s,1,Playback(vm-nobodyavail)
+ same => n,Hangup()
+
+[teamora-cleanup]
+exten => s,1,NoOp(Teamora call cleanup)
+ same => n,Return()

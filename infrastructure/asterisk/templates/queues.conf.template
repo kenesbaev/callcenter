@@ -1,0 +1,14 @@
+[general]
+autofill=yes
+shared_lastcall=yes
+
+[teamora-support]
+strategy=rrmemory
+timeout=20
+retry=5
+wrapuptime=10
+maxlen=${SIP_MAX_CHANNELS}
+joinempty=no
+leavewhenempty=yes
+ringinuse=no
+; Queue members are provisioned by the control plane in a later stage.

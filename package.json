@@ -1,0 +1,37 @@
+{
+  "name": "teamora-voice",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "services/voice-gateway",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @teamora/web",
+    "dev:gateway": "npm run dev --workspace @teamora/voice-gateway",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "npm run lint --workspace @teamora/web && npm run lint --workspace @teamora/voice-gateway",
+    "typecheck": "npm run typecheck --workspace @teamora/web && npm run typecheck --workspace @teamora/voice-gateway",
+    "test": "npm run test --workspace @teamora/voice-gateway && npm run test --workspace @teamora/web",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "^1.62.0",
+    "eslint": "10.8.0",
+    "globals": "latest",
+    "prettier": "latest",
+    "prettier-plugin-tailwindcss": "latest",
+    "typescript-eslint": "latest"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "postcss": "8.5.23",
+    "sharp": "0.35.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

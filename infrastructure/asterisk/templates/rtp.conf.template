@@ -1,0 +1,6 @@
+[general]
+rtpstart=${ASTERISK_RTP_PORT_START}
+rtpend=${ASTERISK_RTP_PORT_END}
+strictrtp=yes
+probation=4
+icesupport=no

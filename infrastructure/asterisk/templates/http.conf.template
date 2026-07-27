@@ -1,0 +1,7 @@
+[general]
+enabled=yes
+bindaddr=0.0.0.0
+bindport=8088
+tlsenable=no
+; TLS terminates on the private infrastructure proxy in this local profile.
+; Production ARI must use TLS and remain unreachable from the public internet.

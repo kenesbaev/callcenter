@@ -1,0 +1,12 @@
+{
+  "name": "@teamora/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "zod": "latest"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

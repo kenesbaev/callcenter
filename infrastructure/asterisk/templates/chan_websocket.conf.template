@@ -1,0 +1,3 @@
+[global]
+; Media WebSocket framing is configured per ARI External Media channel.
+; Do not expose this connection outside the internal voice network.

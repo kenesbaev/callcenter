@@ -1,0 +1,35 @@
+{
+  "name": "@teamora/voice-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "esbuild src/index.ts --bundle --packages=external --alias:@teamora/config=../../packages/config/src/index.ts --alias:@teamora/contracts=../../packages/contracts/src/index.ts --platform=node --target=node22 --format=esm --outfile=dist/index.js --sourcemap",
+    "start": "node dist/index.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@teamora/config": "*",
+    "@teamora/contracts": "*",
+    "ajv": "6.15.0",
+    "pino": "latest",
+    "prom-client": "latest",
+    "ws": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "latest",
+    "@types/ws": "latest",
+    "esbuild": "0.28.1",
+    "eslint": "10.8.0",
+    "globals": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "typescript-eslint": "latest",
+    "vitest": "latest"
+  }
+}

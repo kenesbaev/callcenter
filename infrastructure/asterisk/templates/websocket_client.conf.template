@@ -1,0 +1,9 @@
+; Requires an Asterisk build with chan_websocket / websocket client support.
+; The Debian local image may use the ARI External Media RTP fallback instead.
+[teamora-media]
+type=websocket_client
+uri=ws://${ASTERISK_EXTERNAL_MEDIA_HOST}/media
+protocols=media
+connection_type=per_call_config
+connection_timeout=1000
+reconnect_interval=1000

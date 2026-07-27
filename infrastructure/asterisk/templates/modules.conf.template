@@ -1,0 +1,7 @@
+[modules]
+autoload=yes
+preload=res_http_websocket.so
+preload=res_ari.so
+preload=res_ari_channels.so
+preload=chan_pjsip.so
+noload=chan_sip.so

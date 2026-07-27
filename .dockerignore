@@ -1,0 +1,16 @@
+.git
+.next
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.test-artifacts
+.teamora
+**/__pycache__
+**/*.pyc
+**/.next
+**/dist
+**/node_modules
+node_modules
+.env
+*.log
+coverage
