@@ -9,6 +9,7 @@ from teamora_api.enums import LanguageCode, OperatorVersionStatus
 
 
 class AiOperatorCreate(BaseModel):
+    project_id: UUID | None = None
     name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=500)
     system_instructions: str = Field(min_length=20, max_length=12_000)
@@ -33,6 +34,7 @@ class AiOperatorVersionRead(BaseModel):
 
 class AiOperatorRead(BaseModel):
     id: UUID
+    project_id: UUID
     name: str
     description: str
     is_active: bool

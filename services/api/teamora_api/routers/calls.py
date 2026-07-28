@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
@@ -21,8 +21,11 @@ from teamora_api.models import (
     Customer,
     CustomerContact,
     CustomerNote,
+    HumanOperator,
+    TenantSettings,
     TranscriptSegment,
 )
+from teamora_api.project_access import resolve_project
 from teamora_api.schemas.calls import (
     CallDetail,
     CallRead,
@@ -40,6 +43,7 @@ router = APIRouter(prefix="/calls", tags=["calls"])
 def serialize_call(call: Call) -> CallRead:
     return CallRead(
         id=call.id,
+        project_id=call.project_id,
         channel=call.channel,
         status=call.status,
         language=call.language,
@@ -99,6 +103,89 @@ async def append_call_event(
     )
 
 
+async def reserve_call_capacity(
+    session: SessionDep,
+    principal: Principal,
+    customer: Customer,
+) -> Call | None:
+    tenant_settings = await session.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == principal.tenant_id).with_for_update()
+    )
+    project = await resolve_project(
+        session,
+        principal,
+        customer.project_id,
+        for_update=True,
+    )
+    existing = await session.scalar(
+        select(Call).where(
+            Call.tenant_id == principal.tenant_id,
+            Call.operator_user_id == principal.user_id,
+            Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+        )
+    )
+    if existing is not None:
+        if existing.customer_id == customer.id:
+            return existing
+        raise ApiError(409, "operator_has_active_call", "Сначала завершите текущий звонок")
+
+    active_tenant_calls = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Call)
+            .where(
+                Call.tenant_id == principal.tenant_id,
+                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+            )
+        )
+        or 0
+    )
+    tenant_limit = (
+        tenant_settings.max_concurrent_calls
+        if tenant_settings is not None
+        else get_settings().default_max_concurrent_calls
+    )
+    if active_tenant_calls >= tenant_limit:
+        raise ApiError(409, "no_free_channels", "Нет свободных телефонных каналов")
+
+    active_project_calls = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Call)
+            .where(
+                Call.tenant_id == principal.tenant_id,
+                Call.project_id == project.id,
+                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+            )
+        )
+        or 0
+    )
+    if active_project_calls >= project.max_concurrent_calls:
+        raise ApiError(409, "project_call_limit", "Лимит одновременных звонков проекта исчерпан")
+
+    operator_limit = await session.scalar(
+        select(HumanOperator.max_concurrent_calls).where(
+            HumanOperator.tenant_id == principal.tenant_id,
+            HumanOperator.membership_id == principal.membership_id,
+        )
+    )
+    active_operator_calls = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Call)
+            .where(
+                Call.tenant_id == principal.tenant_id,
+                Call.operator_user_id == principal.user_id,
+                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+            )
+        )
+        or 0
+    )
+    if active_operator_calls >= (operator_limit or 1):
+        raise ApiError(409, "operator_call_limit", "Лимит звонков оператора исчерпан")
+    return None
+
+
 @router.post("/start", response_model=CallRead, status_code=201)
 async def start_call(
     payload: CallStartRequest,
@@ -131,13 +218,18 @@ async def start_call(
             Customer.id == payload.customer_id,
             Customer.locked_by_user_id == principal.user_id,
             Customer.locked_until > now,
+            Customer.lock_token == payload.lock_token,
         )
     )
     if customer is None:
         raise ApiError(409, "customer_not_assigned", "Сначала получите клиента через диалер")
+    capacity_call = await reserve_call_capacity(session, principal, customer)
+    if capacity_call is not None:
+        return serialize_call(capacity_call)
     phone = await session.scalar(
         select(CustomerContact).where(
             CustomerContact.tenant_id == principal.tenant_id,
+            CustomerContact.project_id == customer.project_id,
             CustomerContact.customer_id == customer.id,
             CustomerContact.kind == "phone",
             CustomerContact.is_primary.is_(True),
@@ -151,9 +243,11 @@ async def start_call(
         callback = await session.scalar(
             select(CallbackTask).where(
                 CallbackTask.tenant_id == principal.tenant_id,
+                CallbackTask.project_id == customer.project_id,
                 CallbackTask.id == payload.callback_task_id,
                 CallbackTask.customer_id == customer.id,
-                CallbackTask.status == "pending",
+                CallbackTask.status.in_(["pending", "in_progress"]),
+                CallbackTask.assigned_user_id == principal.user_id,
             )
         )
         if callback is None:
@@ -161,6 +255,7 @@ async def start_call(
 
     call = Call(
         tenant_id=principal.tenant_id,
+        project_id=customer.project_id,
         external_call_id=f"mock:{uuid4()}",
         channel=CallChannel.DEVELOPMENT_SIMULATOR,
         status=CallStatus.RINGING,
@@ -190,6 +285,7 @@ async def start_call(
         callback.assigned_user_id = principal.user_id
         callback.status = "in_progress"
     customer.last_call_at = now
+    customer.locked_until = now + timedelta(minutes=15)
     await append_call_event(
         session,
         tenant_id=principal.tenant_id,
@@ -406,6 +502,7 @@ async def save_call_result(
         if new_callback is None:
             new_callback = CallbackTask(
                 tenant_id=principal.tenant_id,
+                project_id=customer.project_id,
                 customer_id=customer.id,
                 call_id=call.id,
                 assigned_user_id=principal.user_id,
@@ -421,6 +518,7 @@ async def save_call_result(
         customer.next_call_at = None
     customer.locked_by_user_id = None
     customer.locked_until = None
+    customer.lock_token = None
     customer.last_call_at = call.ended_at or now
     await append_call_event(
         session,
@@ -451,16 +549,20 @@ async def save_call_result(
 async def list_calls(
     session: SessionDep,
     principal: Principal = require_permission("calls:read"),
+    project_id: UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> Page[CallRead]:
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
-    where = Call.tenant_id == principal.tenant_id
-    total = int(await session.scalar(select(func.count()).select_from(Call).where(where)) or 0)
+    filters = [Call.tenant_id == principal.tenant_id]
+    if project_id is not None:
+        project = await resolve_project(session, principal, project_id, active_only=False)
+        filters.append(Call.project_id == project.id)
+    total = int(await session.scalar(select(func.count()).select_from(Call).where(*filters)) or 0)
     calls = list(
         await session.scalars(
-            select(Call).where(where).order_by(Call.created_at.desc()).limit(limit).offset(offset)
+            select(Call).where(*filters).order_by(Call.created_at.desc()).limit(limit).offset(offset)
         )
     )
     return Page(items=[serialize_call(call) for call in calls], total=total, limit=limit, offset=offset)
@@ -475,6 +577,7 @@ async def get_call(
     call = await session.scalar(select(Call).where(Call.tenant_id == principal.tenant_id, Call.id == call_id))
     if call is None:
         raise ApiError(404, "call_not_found", "Call was not found")
+    await resolve_project(session, principal, call.project_id, active_only=False)
     segments = list(
         await session.scalars(
             select(TranscriptSegment)

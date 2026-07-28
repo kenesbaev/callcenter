@@ -8,8 +8,10 @@ from sqlalchemy import and_, func, select
 
 from teamora_api.audit import write_audit
 from teamora_api.dependencies import Principal, SessionDep, require_permission
+from teamora_api.enums import RoleName
 from teamora_api.errors import ApiError
 from teamora_api.models import CallbackTask, Customer, CustomerContact
+from teamora_api.project_access import resolve_project
 from teamora_api.schemas.common import Page
 from teamora_api.schemas.crm import CallbackCreate, CallbackRead
 
@@ -21,6 +23,7 @@ def serialize_callback(
 ) -> CallbackRead:
     return CallbackRead(
         id=task.id,
+        project_id=task.project_id,
         customer_id=task.customer_id,
         customer_name=customer.display_name,
         customer_phone=contact.display_value if contact else None,
@@ -35,7 +38,10 @@ def serialize_callback(
 
 
 async def callback_row(
-    session: SessionDep, tenant_id: UUID, task_id: UUID
+    session: SessionDep,
+    tenant_id: UUID,
+    task_id: UUID,
+    assigned_user_id: UUID | None = None,
 ) -> tuple[CallbackTask, Customer, CustomerContact | None] | None:
     row = (
         await session.execute(
@@ -46,11 +52,20 @@ async def callback_row(
                 and_(
                     CustomerContact.customer_id == Customer.id,
                     CustomerContact.tenant_id == tenant_id,
+                    CustomerContact.project_id == Customer.project_id,
                     CustomerContact.kind == "phone",
                     CustomerContact.is_primary.is_(True),
                 ),
             )
-            .where(CallbackTask.tenant_id == tenant_id, CallbackTask.id == task_id)
+            .where(
+                CallbackTask.tenant_id == tenant_id,
+                CallbackTask.id == task_id,
+                *(
+                    [CallbackTask.assigned_user_id == assigned_user_id]
+                    if assigned_user_id is not None
+                    else []
+                ),
+            )
         )
     ).one_or_none()
     if row is None:
@@ -63,12 +78,18 @@ async def list_callbacks(
     session: SessionDep,
     principal: Principal = require_permission("callbacks:manage"),
     status: str | None = None,
+    project_id: UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> Page[CallbackRead]:
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
     filters = [CallbackTask.tenant_id == principal.tenant_id]
+    if project_id is not None:
+        project = await resolve_project(session, principal, project_id, active_only=False)
+        filters.append(CallbackTask.project_id == project.id)
+    if principal.role == RoleName.HUMAN_OPERATOR:
+        filters.append(CallbackTask.assigned_user_id == principal.user_id)
     if status:
         filters.append(CallbackTask.status == status)
     total = int(await session.scalar(select(func.count()).select_from(CallbackTask).where(*filters)) or 0)
@@ -81,6 +102,7 @@ async def list_callbacks(
                 and_(
                     CustomerContact.customer_id == Customer.id,
                     CustomerContact.tenant_id == principal.tenant_id,
+                    CustomerContact.project_id == Customer.project_id,
                     CustomerContact.kind == "phone",
                     CustomerContact.is_primary.is_(True),
                 ),
@@ -120,8 +142,20 @@ async def create_callback(
     )
     if customer is None:
         raise ApiError(404, "customer_not_found", "Клиент не найден")
+    await resolve_project(session, principal, customer.project_id)
+    if principal.role == RoleName.HUMAN_OPERATOR and (
+        customer.locked_by_user_id != principal.user_id
+        or customer.locked_until is None
+        or customer.locked_until <= datetime.now(UTC)
+    ):
+        raise ApiError(
+            403,
+            "customer_not_assigned",
+            "Оператор может создать перезвон только для назначенного клиента",
+        )
     task = CallbackTask(
         tenant_id=principal.tenant_id,
+        project_id=customer.project_id,
         customer_id=customer.id,
         assigned_user_id=principal.user_id,
         due_at=due_at,
@@ -156,7 +190,12 @@ async def complete_callback(
     session: SessionDep,
     principal: Principal = require_permission("callbacks:manage"),
 ) -> CallbackRead:
-    row = await callback_row(session, principal.tenant_id, task_id)
+    row = await callback_row(
+        session,
+        principal.tenant_id,
+        task_id,
+        principal.user_id if principal.role == RoleName.HUMAN_OPERATOR else None,
+    )
     if row is None:
         raise ApiError(404, "callback_not_found", "Задача на перезвон не найдена")
     task, customer, contact = row

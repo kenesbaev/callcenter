@@ -18,6 +18,7 @@ def normalize_phone(value: str) -> str:
 
 
 class CustomerCreate(BaseModel):
+    project_id: UUID | None = None
     display_name: str = Field(min_length=2, max_length=160)
     phone: str
     alternate_phone: str | None = None
@@ -41,6 +42,7 @@ class CustomerContactRead(BaseModel):
 
 class CustomerRead(BaseModel):
     id: UUID
+    project_id: UUID
     display_name: str | None
     external_reference: str | None
     preferred_language: LanguageCode | None
@@ -62,6 +64,7 @@ class CallbackCreate(BaseModel):
 
 class CallbackRead(BaseModel):
     id: UUID
+    project_id: UUID
     customer_id: UUID
     customer_name: str | None
     customer_phone: str | None
@@ -78,3 +81,8 @@ class DialerAssignment(BaseModel):
     customer: CustomerRead
     source: Literal["callback", "new"]
     callback_task_id: UUID | None = None
+    lock_token: UUID
+
+
+class DialerLeaseRequest(BaseModel):
+    lock_token: UUID

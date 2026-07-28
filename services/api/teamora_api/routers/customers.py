@@ -10,6 +10,7 @@ from teamora_api.audit import write_audit
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.errors import ApiError
 from teamora_api.models import Customer, CustomerContact, CustomerNote
+from teamora_api.project_access import resolve_project
 from teamora_api.schemas.common import Page
 from teamora_api.schemas.crm import CustomerContactRead, CustomerCreate, CustomerRead
 
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 def serialize_customer(customer: Customer, contacts: list[CustomerContact]) -> CustomerRead:
     return CustomerRead(
         id=customer.id,
+        project_id=customer.project_id,
         display_name=customer.display_name,
         external_reference=customer.external_reference,
         preferred_language=customer.preferred_language,
@@ -63,12 +65,16 @@ async def list_customers(
     principal: Principal = require_permission("customers:manage"),
     search: str = "",
     status: str | None = None,
+    project_id: UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> Page[CustomerRead]:
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
     filters = [Customer.tenant_id == principal.tenant_id, Customer.is_anonymized.is_(False)]
+    if project_id is not None:
+        project = await resolve_project(session, principal, project_id, active_only=False)
+        filters.append(Customer.project_id == project.id)
     if status:
         filters.append(Customer.status == status)
     if search.strip():
@@ -78,6 +84,7 @@ async def list_customers(
             .where(
                 CustomerContact.tenant_id == principal.tenant_id,
                 CustomerContact.customer_id == Customer.id,
+                CustomerContact.project_id == Customer.project_id,
                 CustomerContact.display_value.ilike(pattern),
             )
             .exists()
@@ -113,14 +120,15 @@ async def create_customer(
     session: SessionDep,
     principal: Principal = require_permission("customers:manage"),
 ) -> CustomerRead:
+    project = await resolve_project(session, principal, payload.project_id)
     contact_values = [payload.phone]
     if payload.alternate_phone:
         contact_values.append(payload.alternate_phone)
-    if payload.email:
-        contact_values.append(str(payload.email).lower())
     duplicate = await session.scalar(
         select(CustomerContact.id).where(
             CustomerContact.tenant_id == principal.tenant_id,
+            CustomerContact.project_id == project.id,
+            CustomerContact.kind == "phone",
             CustomerContact.normalized_value.in_(contact_values),
         )
     )
@@ -129,6 +137,7 @@ async def create_customer(
 
     customer = Customer(
         tenant_id=principal.tenant_id,
+        project_id=project.id,
         display_name=payload.display_name.strip(),
         external_reference=payload.external_reference,
         preferred_language=payload.preferred_language,
@@ -140,6 +149,7 @@ async def create_customer(
     contacts = [
         CustomerContact(
             tenant_id=principal.tenant_id,
+            project_id=project.id,
             customer_id=customer.id,
             kind="phone",
             normalized_value=payload.phone,
@@ -151,6 +161,7 @@ async def create_customer(
         contacts.append(
             CustomerContact(
                 tenant_id=principal.tenant_id,
+                project_id=project.id,
                 customer_id=customer.id,
                 kind="phone",
                 normalized_value=payload.alternate_phone,
@@ -163,6 +174,7 @@ async def create_customer(
         contacts.append(
             CustomerContact(
                 tenant_id=principal.tenant_id,
+                project_id=project.id,
                 customer_id=customer.id,
                 kind="email",
                 normalized_value=email,

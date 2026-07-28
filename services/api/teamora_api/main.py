@@ -26,6 +26,7 @@ from teamora_api.routers import (
     knowledge,
     operations,
     operators,
+    projects,
     simulator,
     tenants,
     webhooks,
@@ -69,6 +70,7 @@ app.include_router(auth.router, prefix=api_v1_prefix)
 app.include_router(health.router, prefix=api_v1_prefix)
 app.include_router(tenants.router, prefix=api_v1_prefix)
 app.include_router(operators.router, prefix=api_v1_prefix)
+app.include_router(projects.router, prefix=api_v1_prefix)
 app.include_router(knowledge.router, prefix=api_v1_prefix)
 app.include_router(customers.router, prefix=api_v1_prefix)
 app.include_router(callbacks.router, prefix=api_v1_prefix)

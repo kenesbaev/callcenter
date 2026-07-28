@@ -6,11 +6,12 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from teamora_api.db import SessionFactory, set_tenant_context
 from teamora_api.enums import RoleName
 from teamora_api.main import app
-from teamora_api.models import Membership, User
+from teamora_api.models import Membership, Project, ProjectUser, User
 from teamora_api.security import hash_password
 
 Register = Callable[[AsyncClient, str], Awaitable[tuple[dict[str, object], str]]]
@@ -48,7 +49,11 @@ async def test_complete_operator_call_and_callback_flow(
     response = await client.post(
         "/api/v1/calls/start",
         headers={"X-CSRF-Token": csrf},
-        json={"customer_id": customer["id"], "from_number": "MOCK"},
+        json={
+            "customer_id": customer["id"],
+            "lock_token": assignment["lock_token"],
+            "from_number": "MOCK",
+        },
     )
     assert response.status_code == 201, response.text
     call = response.json()
@@ -123,6 +128,10 @@ async def test_customer_cannot_be_claimed_by_two_operators(
     operator_password = "OperatorPass123!"  # noqa: S105 - isolated test credential
     async with SessionFactory.begin() as session:
         await set_tenant_context(session, tenant_id)
+        project = await session.scalar(
+            select(Project).where(Project.tenant_id == tenant_id, Project.is_default.is_(True))
+        )
+        assert project is not None
         user = User(
             email=operator_email,
             display_name="Second Operator",
@@ -130,12 +139,20 @@ async def test_customer_cannot_be_claimed_by_two_operators(
         )
         session.add(user)
         await session.flush()
-        session.add(
-            Membership(
-                tenant_id=tenant_id,
-                user_id=user.id,
-                role=RoleName.HUMAN_OPERATOR,
-            )
+        session.add_all(
+            [
+                Membership(
+                    tenant_id=tenant_id,
+                    user_id=user.id,
+                    role=RoleName.HUMAN_OPERATOR,
+                ),
+                ProjectUser(
+                    tenant_id=tenant_id,
+                    project_id=project.id,
+                    user_id=user.id,
+                    is_active=True,
+                ),
+            ]
         )
 
     transport = ASGITransport(app=app)

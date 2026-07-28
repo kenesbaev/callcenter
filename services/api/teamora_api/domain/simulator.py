@@ -134,25 +134,32 @@ async def create_simulated_call(
     ).one_or_none()
     if row is None:
         raise ApiError(409, "operator_not_published", "Publish the AI operator before starting a simulation")
-    _, version = row
+    operator, version = row
     if language.value not in version.allowed_languages:
         raise ApiError(422, "language_not_allowed", "This AI operator does not allow the selected language")
 
     contact = await session.scalar(
         select(CustomerContact).where(
             CustomerContact.tenant_id == tenant_id,
+            CustomerContact.project_id == operator.project_id,
             CustomerContact.kind == "phone",
             CustomerContact.normalized_value == customer_phone,
         )
     )
     customer: Customer | None
     if contact is None:
-        customer = Customer(tenant_id=tenant_id, display_name=customer_name, preferred_language=language)
+        customer = Customer(
+            tenant_id=tenant_id,
+            project_id=operator.project_id,
+            display_name=customer_name,
+            preferred_language=language,
+        )
         session.add(customer)
         await session.flush()
         session.add(
             CustomerContact(
                 tenant_id=tenant_id,
+                project_id=operator.project_id,
                 customer_id=customer.id,
                 kind="phone",
                 normalized_value=customer_phone,
@@ -168,6 +175,7 @@ async def create_simulated_call(
     now = datetime.now(UTC)
     call = Call(
         tenant_id=tenant_id,
+        project_id=operator.project_id,
         external_call_id=external_id,
         channel=CallChannel.DEVELOPMENT_SIMULATOR,
         status=CallStatus.ACTIVE,

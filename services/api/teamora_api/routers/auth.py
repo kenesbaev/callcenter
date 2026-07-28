@@ -14,6 +14,8 @@ from teamora_api.errors import ApiError
 from teamora_api.models import (
     LanguageConfiguration,
     Membership,
+    Project,
+    ProjectUser,
     RefreshToken,
     Tenant,
     TenantSettings,
@@ -93,6 +95,25 @@ async def register(
         await session.flush()
         membership = Membership(tenant_id=tenant.id, user_id=user.id, role=RoleName.TENANT_OWNER)
         session.add(membership)
+        project = Project(
+            tenant_id=tenant.id,
+            name="Основной проект",
+            description="Основной проект компании",
+            status="active",
+            max_concurrent_calls=get_settings().default_max_concurrent_calls,
+            working_hours={},
+            is_default=True,
+        )
+        session.add(project)
+        await session.flush()
+        session.add(
+            ProjectUser(
+                tenant_id=tenant.id,
+                project_id=project.id,
+                user_id=user.id,
+                is_active=True,
+            )
+        )
         session.add(
             TenantSettings(
                 tenant_id=tenant.id,

@@ -6,6 +6,8 @@ The initial Alembic migration creates the requested domain model as 58 tables. G
 
 Tenant-owned groups:
 
+- projects: projects and project-user assignments;
+
 - identity: settings, memberships, refresh tokens, invitations;
 - telephony: numbers, trunks, credential references, inbound and outbound routes;
 - AI configuration: operators and immutable versions, voices, languages, flows and versions;
@@ -37,3 +39,18 @@ The API starts a transaction and sets `app.tenant_id` from the verified membersh
 Published operator and call-flow versions are immutable. Each call pins its operator version so an in-flight call cannot change when a newer version is published. Transcript segments are ordered by `(tenant_id, call_id, sequence)`. Webhook delivery and usage idempotency keys are unique within a tenant.
 
 The migration source of truth is `services/api/alembic/versions`. Schema edits require `alembic check`, upgrade, downgrade in an isolated database, and a tenant isolation test.
+
+## Project boundary and Dialer leases
+
+`projects` belongs to a tenant and has a unique tenant/name pair, one default project,
+working-hours configuration, an outbound number, and a positive concurrent-call limit.
+`project_users` can reference only a user with a membership in the same tenant.
+
+`customers`, `customer_contacts`, `calls`, `callback_tasks`, `ai_operators`, and
+`call_flows` have a non-null project reference. Composite tenant/project foreign keys
+prevent a row from pointing at another tenant's project. Customer phone uniqueness is
+enforced by the partial index `uq_customer_contacts_project_phone` for `kind = 'phone'`.
+
+`customers.lock_token`, `locked_by_user_id`, and `locked_until` form the Dialer lease.
+The token must be presented when starting a call, renewing a lease, or releasing a
+customer. This prevents a stale browser tab from releasing a newer assignment.

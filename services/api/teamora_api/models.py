@@ -8,14 +8,17 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
@@ -111,6 +114,57 @@ class Membership(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class Project(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "projects"
+    __table_args__ = (
+        CheckConstraint("max_concurrent_calls > 0", name="max_concurrent_calls_positive"),
+        CheckConstraint(
+            "status IN ('active', 'paused', 'archived')",
+            name="status_valid",
+        ),
+        UniqueConstraint("tenant_id", "name", name="uq_projects_tenant_name"),
+        UniqueConstraint("tenant_id", "id", name="uq_projects_tenant_id_id"),
+        Index("ix_projects_tenant_status", "tenant_id", "status"),
+        Index(
+            "uq_projects_default_per_tenant",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
+    )
+
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="active", nullable=False, index=True)
+    outbound_number: Mapped[str | None] = mapped_column(String(32))
+    max_concurrent_calls: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    working_hours: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class ProjectUser(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "project_users"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_project_users_tenant_project_projects",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_project_users_tenant_user_memberships",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("project_id", "user_id", name="uq_project_users_project_user"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    user_id: Mapped[UUID] = mapped_column(index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
 class RefreshToken(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "refresh_tokens"
 
@@ -200,8 +254,17 @@ class VoiceProfile(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class AiOperator(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "ai_operators"
-    __table_args__ = (UniqueConstraint("tenant_id", "name"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_ai_operators_tenant_project_projects",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("project_id", "name", name="uq_ai_operators_project_name"),
+    )
 
+    project_id: Mapped[UUID] = mapped_column(index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str] = mapped_column(String(500), default="")
     active_version_id: Mapped[UUID | None] = mapped_column(
@@ -253,6 +316,8 @@ class LanguageConfiguration(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 class CallFlow(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "call_flows"
 
+    project_id: Mapped[UUID] = mapped_column(index=True)
+
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     active_version_id: Mapped[UUID | None] = mapped_column(
         ForeignKey(
@@ -263,6 +328,15 @@ class CallFlow(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
         )
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_call_flows_tenant_project_projects",
+            ondelete="RESTRICT",
+        ),
+    )
 
 
 class CallFlowVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -323,6 +397,8 @@ class KnowledgeSyncJob(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 class Customer(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "customers"
 
+    project_id: Mapped[UUID] = mapped_column(index=True)
+
     display_name: Mapped[str | None] = mapped_column(String(160))
     external_reference: Mapped[str | None] = mapped_column(String(160))
     preferred_language: Mapped[LanguageCode | None] = mapped_column(enum_type(LanguageCode))
@@ -333,14 +409,51 @@ class Customer(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lock_token: Mapped[UUID | None] = mapped_column(index=True)
     last_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_customers_tenant_project_projects",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "id",
+            name="uq_customers_tenant_project_id",
+        ),
+    )
 
 
 class CustomerContact(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "customer_contacts"
-    __table_args__ = (UniqueConstraint("tenant_id", "kind", "normalized_value"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_customer_contacts_tenant_project_projects",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "customer_id"],
+            ["customers.tenant_id", "customers.project_id", "customers.id"],
+            name="fk_customer_contacts_tenant_project_customer",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "uq_customer_contacts_project_phone",
+            "project_id",
+            "normalized_value",
+            unique=True,
+            postgresql_where=text("kind = 'phone'"),
+        ),
+    )
 
+    project_id: Mapped[UUID] = mapped_column(index=True)
     customer_id: Mapped[UUID] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
     normalized_value: Mapped[str] = mapped_column(String(320), nullable=False)
@@ -359,6 +472,7 @@ class CustomerNote(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "calls"
 
+    project_id: Mapped[UUID] = mapped_column(index=True)
     external_call_id: Mapped[str | None] = mapped_column(String(160))
     channel: Mapped[CallChannel] = mapped_column(enum_type(CallChannel), nullable=False)
     status: Mapped[CallStatus] = mapped_column(enum_type(CallStatus), default=CallStatus.QUEUED, index=True)
@@ -386,8 +500,15 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_calls_tenant_project_projects",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("tenant_id", "external_call_id"),
         Index("ix_calls_tenant_started", "tenant_id", "started_at"),
+        Index("ix_calls_project_status", "project_id", "status"),
     )
 
 
@@ -471,8 +592,18 @@ class CallOutcome(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class CallbackTask(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "callback_tasks"
-    __table_args__ = (Index("ix_callback_tasks_tenant_status_due", "tenant_id", "status", "due_at"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_callback_tasks_tenant_project_projects",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_callback_tasks_tenant_status_due", "tenant_id", "status", "due_at"),
+        Index("ix_callback_tasks_project_status_due", "project_id", "status", "due_at"),
+    )
 
+    project_id: Mapped[UUID] = mapped_column(index=True)
     customer_id: Mapped[UUID] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), index=True)
     call_id: Mapped[UUID | None] = mapped_column(ForeignKey("calls.id", ondelete="SET NULL"), index=True)
     assigned_user_id: Mapped[UUID | None] = mapped_column(

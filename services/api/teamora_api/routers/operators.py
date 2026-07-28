@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from sqlalchemy import func, select
@@ -11,6 +12,7 @@ from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import LanguageCode, OperatorVersionStatus
 from teamora_api.errors import ApiError
 from teamora_api.models import AiOperator, AiOperatorVersion
+from teamora_api.project_access import resolve_project
 from teamora_api.schemas.common import Page
 from teamora_api.schemas.operators import AiOperatorCreate, AiOperatorRead, AiOperatorVersionRead
 
@@ -36,6 +38,7 @@ ALLOWED_TOOL_NAMES = {
 def serialize(operator: AiOperator, version: AiOperatorVersion) -> AiOperatorRead:
     return AiOperatorRead(
         id=operator.id,
+        project_id=operator.project_id,
         name=operator.name,
         description=operator.description,
         is_active=operator.is_active,
@@ -49,23 +52,23 @@ def serialize(operator: AiOperator, version: AiOperatorVersion) -> AiOperatorRea
 async def list_operators(
     session: SessionDep,
     principal: Principal = require_permission("operators:manage"),
+    project_id: UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> Page[AiOperatorRead]:
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
-    total = int(
-        await session.scalar(
-            select(func.count()).select_from(AiOperator).where(AiOperator.tenant_id == principal.tenant_id)
-        )
-        or 0
-    )
+    filters = [AiOperator.tenant_id == principal.tenant_id]
+    if project_id is not None:
+        project = await resolve_project(session, principal, project_id, active_only=False)
+        filters.append(AiOperator.project_id == project.id)
+    total = int(await session.scalar(select(func.count()).select_from(AiOperator).where(*filters)) or 0)
     rows = (
         await session.execute(
             select(AiOperator, AiOperatorVersion)
             .join(AiOperatorVersion, AiOperatorVersion.ai_operator_id == AiOperator.id)
             .where(
-                AiOperator.tenant_id == principal.tenant_id,
+                *filters,
                 AiOperatorVersion.tenant_id == principal.tenant_id,
                 AiOperatorVersion.version == 1,
             )
@@ -89,6 +92,7 @@ async def create_operator(
     session: SessionDep,
     principal: Principal = require_permission("operators:manage"),
 ) -> AiOperatorRead:
+    project = await resolve_project(session, principal, payload.project_id)
     if LanguageCode.KAA in payload.allowed_languages and not get_settings().karakalpak_experimental:
         raise ApiError(
             422, "kaa_feature_disabled", "Karakalpak is experimental and the feature flag is disabled"
@@ -98,13 +102,16 @@ async def create_operator(
         raise ApiError(422, "tool_not_allowed", "One or more tools are not in the server registry")
     if await session.scalar(
         select(AiOperator.id).where(
-            AiOperator.tenant_id == principal.tenant_id, AiOperator.name == payload.name
+            AiOperator.tenant_id == principal.tenant_id,
+            AiOperator.project_id == project.id,
+            AiOperator.name == payload.name,
         )
     ):
         raise ApiError(409, "operator_name_taken", "An AI operator with this name already exists")
     async with session.begin_nested():
         operator = AiOperator(
             tenant_id=principal.tenant_id,
+            project_id=project.id,
             name=payload.name,
             description=payload.description,
         )

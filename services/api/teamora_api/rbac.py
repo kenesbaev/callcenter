@@ -26,6 +26,8 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "calls:read",
             "calls:manage",
             "customers:manage",
+            "projects:read",
+            "projects:manage",
             "dialer:use",
             "callbacks:manage",
             "recordings:read",
@@ -45,6 +47,8 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "knowledge:manage",
             "queues:manage",
             "customers:manage",
+            "projects:read",
+            "projects:manage",
             "dialer:use",
             "callbacks:manage",
             "analytics:read",
@@ -60,12 +64,13 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "assigned_calls:read",
             "assigned_calls:accept",
             "customers:assigned",
+            "projects:read",
             "dialer:use",
             "callbacks:manage",
             "simulator:use",
         }
     ),
-    RoleName.ANALYST: frozenset({"calls:read", "analytics:read"}),
+    RoleName.ANALYST: frozenset({"calls:read", "analytics:read", "projects:read"}),
     RoleName.BILLING_ADMIN: frozenset({"billing:read", "usage:read"}),
 }
 

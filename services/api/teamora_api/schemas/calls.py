@@ -39,6 +39,7 @@ class CallSummaryRead(BaseModel):
 
 class CallRead(BaseModel):
     id: UUID
+    project_id: UUID
     channel: CallChannel
     status: CallStatus
     language: LanguageCode | None
@@ -64,6 +65,7 @@ class CallDetail(CallRead):
 
 class CallStartRequest(BaseModel):
     customer_id: UUID
+    lock_token: UUID
     callback_task_id: UUID | None = None
     from_number: str = Field(default="MOCK", min_length=2, max_length=32)
 
