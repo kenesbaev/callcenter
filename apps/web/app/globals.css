@@ -80,7 +80,7 @@ button:disabled {
   height: 36px;
   overflow: visible;
   fill: url("#kline-app-wave");
-  filter: drop-shadow(0 7px 10px rgb(37 99 235 / 16%));
+  filter: drop-shadow(0 7px 10px rgb(228 23 57 / 16%));
 }
 
 .tv-logo-type {
@@ -131,7 +131,7 @@ button:disabled {
 .tv-button-primary {
   color: #fff;
   background: var(--tv-primary);
-  box-shadow: 0 10px 24px rgb(37 99 235 / 20%);
+  box-shadow: 0 10px 24px rgb(228 23 57 / 20%);
 }
 
 .tv-button-primary:hover {
@@ -188,8 +188,8 @@ button:disabled {
 }
 
 .tv-badge-primary {
-  border-color: rgb(37 99 235 / 24%);
-  background: rgb(37 99 235 / 8%);
+  border-color: rgb(228 23 57 / 24%);
+  background: rgb(228 23 57 / 8%);
   color: var(--tv-primary);
 }
 
@@ -715,7 +715,7 @@ button:disabled {
   justify-content: space-between;
   border-right: 1px solid var(--tv-border);
   background:
-    radial-gradient(circle at 18% 20%, rgb(37 99 235 / 10%), transparent 24rem),
+    radial-gradient(circle at 18% 20%, rgb(228 23 57 / 10%), transparent 24rem),
     #ffffff;
   padding: 44px;
 }
@@ -829,11 +829,9 @@ button:disabled {
   display: flex;
   height: 100vh;
   flex-direction: column;
-  border-right: 1px solid rgb(148 163 184 / 12%);
-  background:
-    radial-gradient(circle at 30% 0%, rgb(37 99 235 / 18%), transparent 18rem),
-    #0f172a;
-  box-shadow: 10px 0 32px rgb(15 23 42 / 12%);
+  border-right: 1px solid var(--tv-border);
+  background: #ffffff;
+  box-shadow: 8px 0 28px rgb(20 26 47 / 3%);
   padding: 16px 12px;
 }
 
@@ -844,17 +842,9 @@ button:disabled {
   padding: 0 8px 14px;
 }
 
-.app-sidebar .tv-logo-type strong {
-  color: #f8fafc;
-}
-
-.app-sidebar .tv-logo-type small {
-  color: #67e8f9;
-}
-
 .sidebar-section-label {
   margin: 18px 10px 8px;
-  color: #64748b;
+  color: var(--tv-text-muted);
   font-size: 10px;
   font-weight: 780;
   letter-spacing: 0.13em;
@@ -875,16 +865,16 @@ button:disabled {
   border: 1px solid transparent;
   border-radius: 10px;
   padding: 0 10px;
-  color: #94a3b8;
+  color: var(--tv-text-secondary);
   font-size: 13px;
   font-weight: 600;
 }
 
 .sidebar-link:hover,
 .sidebar-link.active {
-  border-color: rgb(96 165 250 / 18%);
-  background: linear-gradient(90deg, rgb(37 99 235 / 24%), rgb(6 182 212 / 9%));
-  color: #f8fafc;
+  border-color: rgb(228 23 57 / 10%);
+  background: rgb(228 23 57 / 7%);
+  color: var(--tv-primary);
 }
 
 .sidebar-link.active {
@@ -903,9 +893,9 @@ button:disabled {
 
 .sidebar-footer {
   margin-top: auto;
-  border-top: 1px solid rgb(148 163 184 / 14%);
+  border-top: 1px solid var(--tv-border);
   padding: 14px 8px 4px;
-  color: #64748b;
+  color: var(--tv-text-muted);
   font-size: 11px;
   line-height: 1.5;
 }
@@ -979,7 +969,7 @@ button:disabled {
   left: 18px;
   height: 2px;
   border-radius: 0 0 3px 3px;
-  background: linear-gradient(90deg, var(--tv-primary), rgb(37 99 235 / 15%));
+  background: linear-gradient(90deg, var(--tv-primary), rgb(228 23 57 / 15%));
   content: "";
 }
 .metric-card span {
@@ -1144,8 +1134,8 @@ button:disabled {
   padding: 12px;
 }
 .transcript-line.ai {
-  border-color: rgb(124 58 237 / 22%);
-  background: rgb(124 58 237 / 6%);
+  border-color: rgb(228 23 57 / 22%);
+  background: rgb(228 23 57 / 6%);
 }
 .transcript-line.customer {
   margin-left: auto;
@@ -1370,9 +1360,9 @@ button:disabled {
   height: 42px;
   margin-bottom: 24px;
   place-items: center;
-  border: 1px solid rgb(37 99 235 / 14%);
+  border: 1px solid rgb(228 23 57 / 14%);
   border-radius: 11px;
-  background: rgb(37 99 235 / 7%);
+  background: rgb(228 23 57 / 7%);
   color: var(--tv-primary);
 }
 
@@ -1615,9 +1605,9 @@ button:disabled {
   display: grid;
   gap: 20px;
   margin-bottom: 18px;
-  border-color: rgb(37 99 235 / 18%);
+  border-color: rgb(228 23 57 / 18%);
   background:
-    linear-gradient(135deg, rgb(37 99 235 / 5%), transparent 42%),
+    linear-gradient(135deg, rgb(228 23 57 / 5%), transparent 42%),
     var(--tv-surface-elevated);
 }
 
@@ -1689,7 +1679,7 @@ button:disabled {
 
 .filter-tabs button.active {
   background: var(--tv-surface-elevated);
-  color: #2563eb;
+  color: var(--tv-primary);
   box-shadow: 0 5px 16px rgb(15 23 42 / 8%);
 }
 
@@ -1802,10 +1792,10 @@ button:disabled {
   border-radius: 20px;
   background: linear-gradient(
     135deg,
-    rgb(37 99 235 / 12%),
-    rgb(6 182 212 / 12%)
+    rgb(228 23 57 / 12%),
+    rgb(255 90 120 / 12%)
   );
-  color: #2563eb;
+  color: var(--tv-primary);
 }
 
 .customer-card-head {
@@ -1844,11 +1834,11 @@ button:disabled {
   height: 54px;
   place-items: center;
   border-radius: 17px;
-  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  background: linear-gradient(135deg, var(--tv-primary), #ff5a78);
   color: #fff;
   font-size: 20px;
   font-weight: 750;
-  box-shadow: 0 12px 28px rgb(37 99 235 / 20%);
+  box-shadow: 0 12px 28px rgb(228 23 57 / 20%);
 }
 
 .customer-facts {
@@ -1886,11 +1876,11 @@ button:disabled {
   justify-content: space-between;
   gap: 18px;
   margin-top: 18px;
-  border: 1px solid rgb(37 99 235 / 18%);
+  border: 1px solid rgb(228 23 57 / 18%);
   border-radius: 17px;
   padding: 20px;
   background:
-    radial-gradient(circle at 18% 0%, rgb(6 182 212 / 17%), transparent 34%),
+    radial-gradient(circle at 18% 0%, rgb(228 23 57 / 17%), transparent 34%),
     linear-gradient(135deg, #0f172a, #172554);
   color: #fff;
   box-shadow: 0 24px 48px rgb(15 23 42 / 18%);
@@ -1930,14 +1920,10 @@ button:disabled {
   display: grid;
   gap: 18px;
   margin-top: 20px;
-  border: 1px solid rgb(124 58 237 / 16%);
+  border: 1px solid rgb(228 23 57 / 16%);
   border-radius: 17px;
   padding: 20px;
-  background: linear-gradient(
-    135deg,
-    rgb(124 58 237 / 5%),
-    rgb(37 99 235 / 4%)
-  );
+  background: linear-gradient(135deg, rgb(228 23 57 / 5%), rgb(228 23 57 / 4%));
 }
 
 .call-result-form h3,
@@ -1978,9 +1964,9 @@ button:disabled {
 }
 
 .result-choice-grid label input:checked + span {
-  border-color: #2563eb;
-  background: rgb(37 99 235 / 8%);
-  color: #1d4ed8;
+  border-color: var(--tv-primary);
+  background: rgb(228 23 57 / 8%);
+  color: var(--tv-primary-hover);
   font-weight: 700;
 }
 
@@ -1988,8 +1974,8 @@ button:disabled {
   margin-top: 18px;
   border-radius: 11px;
   padding: 11px 13px;
-  background: rgb(37 99 235 / 7%);
-  color: #1d4ed8;
+  background: rgb(228 23 57 / 7%);
+  color: var(--tv-primary-hover);
 }
 
 .dialer-side-stack {
@@ -2033,13 +2019,9 @@ button:disabled {
 .dialer-next-step {
   display: flex;
   gap: 12px;
-  border-color: rgb(124 58 237 / 18%);
-  background: linear-gradient(
-    135deg,
-    rgb(124 58 237 / 8%),
-    rgb(37 99 235 / 6%)
-  );
-  color: #6d28d9;
+  border-color: rgb(228 23 57 / 18%);
+  background: linear-gradient(135deg, rgb(228 23 57 / 8%), rgb(228 23 57 / 6%));
+  color: var(--tv-primary-hover);
 }
 
 .dialer-next-step p {

@@ -11,8 +11,8 @@ export function TeamoraLogo({ compact = false }: { compact?: boolean }) {
       >
         <defs>
           <linearGradient id="kline-app-wave" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" stopColor="#2563EB" />
-            <stop offset="1" stopColor="#06B6D4" />
+            <stop offset="0" stopColor="#B80A1F" />
+            <stop offset="1" stopColor="#E41739" />
           </linearGradient>
         </defs>
         <rect x="2" y="20" width="7" height="18" rx="3.5" />
