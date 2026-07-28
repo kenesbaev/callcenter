@@ -80,7 +80,7 @@ button:disabled {
   height: 36px;
   overflow: visible;
   fill: url("#kline-app-wave");
-  filter: drop-shadow(0 7px 10px rgb(228 23 57 / 16%));
+  filter: drop-shadow(0 7px 10px rgb(37 99 235 / 16%));
 }
 
 .tv-logo-type {
@@ -131,7 +131,7 @@ button:disabled {
 .tv-button-primary {
   color: #fff;
   background: var(--tv-primary);
-  box-shadow: 0 10px 24px rgb(228 23 57 / 20%);
+  box-shadow: 0 10px 24px rgb(37 99 235 / 20%);
 }
 
 .tv-button-primary:hover {
@@ -188,8 +188,8 @@ button:disabled {
 }
 
 .tv-badge-primary {
-  border-color: rgb(228 23 57 / 24%);
-  background: rgb(228 23 57 / 8%);
+  border-color: rgb(37 99 235 / 24%);
+  background: rgb(37 99 235 / 8%);
   color: var(--tv-primary);
 }
 
@@ -715,7 +715,7 @@ button:disabled {
   justify-content: space-between;
   border-right: 1px solid var(--tv-border);
   background:
-    radial-gradient(circle at 18% 20%, rgb(228 23 57 / 10%), transparent 24rem),
+    radial-gradient(circle at 18% 20%, rgb(37 99 235 / 10%), transparent 24rem),
     #ffffff;
   padding: 44px;
 }
@@ -829,9 +829,11 @@ button:disabled {
   display: flex;
   height: 100vh;
   flex-direction: column;
-  border-right: 1px solid var(--tv-border);
-  background: #ffffff;
-  box-shadow: 8px 0 28px rgb(20 26 47 / 3%);
+  border-right: 1px solid rgb(148 163 184 / 12%);
+  background:
+    radial-gradient(circle at 30% 0%, rgb(37 99 235 / 18%), transparent 18rem),
+    #0f172a;
+  box-shadow: 10px 0 32px rgb(15 23 42 / 12%);
   padding: 16px 12px;
 }
 
@@ -842,9 +844,17 @@ button:disabled {
   padding: 0 8px 14px;
 }
 
+.app-sidebar .tv-logo-type strong {
+  color: #f8fafc;
+}
+
+.app-sidebar .tv-logo-type small {
+  color: #67e8f9;
+}
+
 .sidebar-section-label {
   margin: 18px 10px 8px;
-  color: var(--tv-text-muted);
+  color: #64748b;
   font-size: 10px;
   font-weight: 780;
   letter-spacing: 0.13em;
@@ -865,16 +875,16 @@ button:disabled {
   border: 1px solid transparent;
   border-radius: 10px;
   padding: 0 10px;
-  color: var(--tv-text-secondary);
+  color: #94a3b8;
   font-size: 13px;
   font-weight: 600;
 }
 
 .sidebar-link:hover,
 .sidebar-link.active {
-  border-color: rgb(228 23 57 / 10%);
-  background: rgb(228 23 57 / 7%);
-  color: var(--tv-primary);
+  border-color: rgb(96 165 250 / 18%);
+  background: linear-gradient(90deg, rgb(37 99 235 / 24%), rgb(6 182 212 / 9%));
+  color: #f8fafc;
 }
 
 .sidebar-link.active {
@@ -893,9 +903,9 @@ button:disabled {
 
 .sidebar-footer {
   margin-top: auto;
-  border-top: 1px solid var(--tv-border);
+  border-top: 1px solid rgb(148 163 184 / 14%);
   padding: 14px 8px 4px;
-  color: var(--tv-text-muted);
+  color: #64748b;
   font-size: 11px;
   line-height: 1.5;
 }
@@ -969,7 +979,7 @@ button:disabled {
   left: 18px;
   height: 2px;
   border-radius: 0 0 3px 3px;
-  background: linear-gradient(90deg, var(--tv-primary), rgb(228 23 57 / 15%));
+  background: linear-gradient(90deg, var(--tv-primary), rgb(37 99 235 / 15%));
   content: "";
 }
 .metric-card span {
@@ -1134,8 +1144,8 @@ button:disabled {
   padding: 12px;
 }
 .transcript-line.ai {
-  border-color: rgb(228 23 57 / 22%);
-  background: rgb(228 23 57 / 6%);
+  border-color: rgb(124 58 237 / 22%);
+  background: rgb(124 58 237 / 6%);
 }
 .transcript-line.customer {
   margin-left: auto;
@@ -1360,9 +1370,9 @@ button:disabled {
   height: 42px;
   margin-bottom: 24px;
   place-items: center;
-  border: 1px solid rgb(228 23 57 / 14%);
+  border: 1px solid rgb(37 99 235 / 14%);
   border-radius: 11px;
-  background: rgb(228 23 57 / 7%);
+  background: rgb(37 99 235 / 7%);
   color: var(--tv-primary);
 }
 
@@ -1597,5 +1607,475 @@ button:disabled {
   .section-skeleton,
   .settings-fields {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Production CRM workflow */
+.crm-create-panel {
+  display: grid;
+  gap: 20px;
+  margin-bottom: 18px;
+  border-color: rgb(37 99 235 / 18%);
+  background:
+    linear-gradient(135deg, rgb(37 99 235 / 5%), transparent 42%),
+    var(--tv-surface-elevated);
+}
+
+.crm-inline-form {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.crm-form-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.field-error {
+  color: #dc2626;
+}
+
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.search-control {
+  display: flex;
+  width: min(440px, 100%);
+  min-height: 42px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--tv-border);
+  border-radius: 12px;
+  padding: 0 13px;
+  background: var(--tv-surface-elevated);
+  color: var(--tv-text-secondary);
+}
+
+.search-control input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--tv-text-primary);
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 20px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--tv-surface-muted);
+  width: fit-content;
+}
+
+.filter-tabs button {
+  border: 0;
+  border-radius: 9px;
+  padding: 8px 13px;
+  background: transparent;
+  color: var(--tv-text-secondary);
+  cursor: pointer;
+}
+
+.filter-tabs button.active {
+  background: var(--tv-surface-elevated);
+  color: #2563eb;
+  box-shadow: 0 5px 16px rgb(15 23 42 / 8%);
+}
+
+.callback-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.callback-card {
+  display: flex;
+  min-height: 250px;
+  flex-direction: column;
+  gap: 16px;
+  border: 1px solid var(--tv-border);
+  border-radius: 15px;
+  padding: 18px;
+  background: linear-gradient(180deg, #fff, #fbfdff);
+  box-shadow: 0 14px 34px rgb(15 23 42 / 5%);
+}
+
+.callback-card.overdue {
+  border-color: rgb(220 38 38 / 25%);
+  box-shadow: 0 14px 34px rgb(220 38 38 / 6%);
+}
+
+.callback-card h3,
+.callback-card p {
+  margin: 0;
+}
+
+.callback-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--tv-text-secondary);
+}
+
+.callback-note {
+  flex: 1;
+  color: var(--tv-text-secondary);
+  line-height: 1.55;
+}
+
+.dialer-heading {
+  gap: 20px;
+}
+
+.operator-state {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid rgb(22 163 74 / 18%);
+  border-radius: 14px;
+  padding: 10px 14px;
+  background: rgb(22 163 74 / 5%);
+}
+
+.operator-state div {
+  display: flex;
+  flex-direction: column;
+}
+
+.operator-state span {
+  color: var(--tv-text-secondary);
+  font-size: 12px;
+}
+
+.presence-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #16a34a;
+  box-shadow: 0 0 0 5px rgb(22 163 74 / 12%);
+}
+
+.dialer-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(310px, 0.75fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.dialer-customer-panel {
+  min-height: 660px;
+  padding: 26px;
+}
+
+.dialer-empty {
+  display: flex;
+  min-height: 560px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  text-align: center;
+}
+
+.dialer-empty p {
+  max-width: 480px;
+  color: var(--tv-text-secondary);
+  line-height: 1.6;
+}
+
+.dialer-empty-icon {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  margin-bottom: 14px;
+  border-radius: 20px;
+  background: linear-gradient(
+    135deg,
+    rgb(37 99 235 / 12%),
+    rgb(6 182 212 / 12%)
+  );
+  color: #2563eb;
+}
+
+.customer-card-head {
+  gap: 18px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--tv-border);
+}
+
+.customer-identity {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.customer-identity h2,
+.customer-identity p,
+.customer-identity span {
+  margin: 0;
+}
+
+.customer-identity span {
+  color: var(--tv-text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.customer-identity p {
+  margin-top: 5px;
+  color: var(--tv-text-secondary);
+}
+
+.customer-avatar {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border-radius: 17px;
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 750;
+  box-shadow: 0 12px 28px rgb(37 99 235 / 20%);
+}
+
+.customer-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+
+.customer-facts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid var(--tv-border);
+  border-radius: 13px;
+  padding: 14px;
+  background: var(--tv-surface-muted);
+}
+
+.customer-facts span {
+  color: var(--tv-text-secondary);
+  font-size: 12px;
+}
+
+.dialer-primary-actions,
+.call-control-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.active-call-console {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 18px;
+  border: 1px solid rgb(37 99 235 / 18%);
+  border-radius: 17px;
+  padding: 20px;
+  background:
+    radial-gradient(circle at 18% 0%, rgb(6 182 212 / 17%), transparent 34%),
+    linear-gradient(135deg, #0f172a, #172554);
+  color: #fff;
+  box-shadow: 0 24px 48px rgb(15 23 42 / 18%);
+}
+
+.active-call-console > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.active-call-console span,
+.active-call-console small {
+  color: #cbd5e1;
+}
+
+.call-timer {
+  font-variant-numeric: tabular-nums;
+  font-size: 38px;
+  letter-spacing: -0.04em;
+}
+
+.hangup-button {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 0;
+  border-radius: 15px;
+  background: #dc2626;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 12px 26px rgb(220 38 38 / 24%);
+}
+
+.call-result-form {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+  border: 1px solid rgb(124 58 237 / 16%);
+  border-radius: 17px;
+  padding: 20px;
+  background: linear-gradient(
+    135deg,
+    rgb(124 58 237 / 5%),
+    rgb(37 99 235 / 4%)
+  );
+}
+
+.call-result-form h3,
+.call-result-form p {
+  margin: 0;
+}
+
+.call-result-form p {
+  margin-top: 4px;
+  color: var(--tv-text-secondary);
+}
+
+.result-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.result-choice-grid label input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.result-choice-grid label span {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--tv-border);
+  border-radius: 11px;
+  padding: 7px 9px;
+  background: #fff;
+  color: var(--tv-text-secondary);
+  cursor: pointer;
+  text-align: center;
+  font-size: 13px;
+}
+
+.result-choice-grid label input:checked + span {
+  border-color: #2563eb;
+  background: rgb(37 99 235 / 8%);
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.dialer-message {
+  margin-top: 18px;
+  border-radius: 11px;
+  padding: 11px 13px;
+  background: rgb(37 99 235 / 7%);
+  color: #1d4ed8;
+}
+
+.dialer-side-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.dialer-guide ol {
+  display: grid;
+  gap: 13px;
+  margin: 18px 0 0;
+  padding-left: 22px;
+  color: var(--tv-text-secondary);
+  line-height: 1.5;
+}
+
+.compact-history {
+  display: grid;
+  gap: 12px;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--tv-border);
+  padding-top: 12px;
+}
+
+.history-row div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.history-row span {
+  color: var(--tv-text-secondary);
+  font-size: 12px;
+}
+
+.dialer-next-step {
+  display: flex;
+  gap: 12px;
+  border-color: rgb(124 58 237 / 18%);
+  background: linear-gradient(
+    135deg,
+    rgb(124 58 237 / 8%),
+    rgb(37 99 235 / 6%)
+  );
+  color: #6d28d9;
+}
+
+.dialer-next-step p {
+  margin: 5px 0 0;
+  color: var(--tv-text-secondary);
+  line-height: 1.45;
+}
+
+@media (max-width: 1180px) {
+  .crm-inline-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .callback-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dialer-workspace {
+    grid-template-columns: 1fr;
+  }
+  .dialer-side-stack {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .crm-inline-form,
+  .callback-grid,
+  .customer-facts,
+  .result-choice-grid,
+  .dialer-side-stack {
+    grid-template-columns: 1fr;
+  }
+  .table-toolbar,
+  .dialer-heading,
+  .customer-card-head,
+  .active-call-console {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

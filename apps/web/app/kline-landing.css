@@ -3,10 +3,10 @@
   --navy-2: #252b3d;
   --ink: #141a2f;
   --muted: #818080;
-  --teal: #e41739;
-  --teal-dark: #e41739;
-  --rose: #ff5a78;
-  --teal-soft: rgba(228, 23, 57, 0.08);
+  --teal: #2563eb;
+  --teal-dark: #1d4ed8;
+  --rose: #7c3aed;
+  --teal-soft: rgba(37, 99, 235, 0.08);
   --line: rgba(20, 26, 47, 0.12);
   --soft: rgba(129, 128, 128, 0.06);
   --white: #fff;
@@ -89,7 +89,7 @@ html {
   height: 44px;
   flex: 0 0 auto;
   overflow: visible;
-  filter: drop-shadow(0 8px 13px rgba(228, 23, 57, 0.16));
+  filter: drop-shadow(0 8px 13px rgba(37, 99, 235, 0.16));
 }
 .logo__type {
   display: flex;
@@ -170,7 +170,7 @@ html {
   font-weight: 800;
 }
 .lang-switch button.active {
-  background: rgba(228, 23, 57, 0.1);
+  background: rgba(37, 99, 235, 0.1);
   color: var(--teal);
 }
 .menu-toggle {
@@ -218,11 +218,11 @@ html {
 .btn--primary {
   color: #fff;
   background: linear-gradient(135deg, var(--teal), var(--rose));
-  box-shadow: 0 15px 32px rgba(228, 23, 57, 0.24);
+  box-shadow: 0 15px 32px rgba(37, 99, 235, 0.24);
 }
 .btn--primary:hover {
-  background: linear-gradient(135deg, #d81434, #ff496b);
-  box-shadow: 0 18px 40px rgba(228, 23, 57, 0.32);
+  background: linear-gradient(135deg, #1d4ed8, #7c3aed);
+  box-shadow: 0 18px 40px rgba(37, 99, 235, 0.32);
 }
 .btn--large {
   min-height: 56px;
@@ -235,7 +235,7 @@ html {
   background: rgba(255, 255, 255, 0.78);
 }
 .btn--ghost:hover {
-  border-color: rgba(228, 23, 57, 0.22);
+  border-color: rgba(37, 99, 235, 0.22);
   background: white;
   box-shadow: 0 12px 32px rgba(20, 26, 47, 0.08);
 }
@@ -259,7 +259,7 @@ html {
   background:
     radial-gradient(
       circle at 16% 24%,
-      rgba(228, 23, 57, 0.105),
+      rgba(37, 99, 235, 0.105),
       transparent 30%
     ),
     radial-gradient(
@@ -292,12 +292,12 @@ html {
   top: 51%;
   width: min(70vw, 780px);
   aspect-ratio: 1;
-  border: 1px solid rgba(228, 23, 57, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.08);
   border-radius: 50%;
   transform: translate(-50%, -48%);
   box-shadow:
     inset 0 0 0 56px rgba(255, 255, 255, 0.25),
-    0 0 90px rgba(228, 23, 57, 0.045);
+    0 0 90px rgba(37, 99, 235, 0.045);
   pointer-events: none;
 }
 .hero-lines {
@@ -309,7 +309,7 @@ html {
     radial-gradient(
       circle at 15% 61%,
       transparent 0 72px,
-      rgba(228, 23, 57, 0.105) 73px,
+      rgba(37, 99, 235, 0.105) 73px,
       transparent 75px
     ),
     radial-gradient(
@@ -321,7 +321,7 @@ html {
     linear-gradient(
       115deg,
       transparent 0 46%,
-      rgba(228, 23, 57, 0.055) 46.15%,
+      rgba(37, 99, 235, 0.055) 46.15%,
       transparent 46.45%
     ),
     linear-gradient(
@@ -342,7 +342,7 @@ html {
   height: 360px;
   right: -120px;
   top: -100px;
-  background: rgba(228, 23, 57, 0.12);
+  background: rgba(37, 99, 235, 0.12);
 }
 .hero-orb--two {
   width: 280px;
@@ -433,7 +433,7 @@ html {
   background: #fff;
   box-shadow:
     0 30px 90px rgba(20, 26, 47, 0.14),
-    0 16px 42px rgba(228, 23, 57, 0.1);
+    0 16px 42px rgba(37, 99, 235, 0.1);
 }
 .hero-image-card img {
   width: 100%;
@@ -627,7 +627,7 @@ html {
 }
 .service-card:hover {
   transform: translateY(-7px);
-  border-color: rgba(228, 23, 57, 0.25);
+  border-color: rgba(37, 99, 235, 0.25);
   box-shadow: 0 22px 45px rgba(129, 128, 128, 0.1);
 }
 .service-icon {
@@ -667,7 +667,7 @@ html {
   padding: 70px 0;
   position: relative;
   overflow: hidden;
-  background: linear-gradient(115deg, #e41739, #e41739 57%, #818080);
+  background: linear-gradient(115deg, #2563eb, #2563eb 57%, #06b6d4);
   color: white;
 }
 .stats-band::before {
@@ -760,9 +760,9 @@ html {
 .live i {
   width: 6px;
   height: 6px;
-  background: #e41739;
+  background: #2563eb;
   border-radius: 50%;
-  box-shadow: 0 0 0 5px rgba(228, 23, 57, 0.1);
+  box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.1);
 }
 .bars {
   height: 120px;
@@ -775,7 +775,7 @@ html {
 }
 .bars span {
   flex: 1;
-  background: linear-gradient(to top, rgba(228, 23, 57, 0.4), #e41739);
+  background: linear-gradient(to top, rgba(37, 99, 235, 0.4), #2563eb);
   border-radius: 5px 5px 0 0;
 }
 .dashboard-foot span {
@@ -809,7 +809,7 @@ html {
 }
 .advantage-card:hover {
   transform: translateX(-7px);
-  border-color: rgba(228, 23, 57, 0.32);
+  border-color: rgba(37, 99, 235, 0.32);
   box-shadow: var(--shadow);
 }
 .advantage-number {
@@ -855,7 +855,7 @@ html {
   transition-delay: var(--delay);
 }
 .case-card:hover {
-  border-color: rgba(228, 23, 57, 0.35);
+  border-color: rgba(37, 99, 235, 0.35);
   box-shadow: var(--shadow);
 }
 .case-top {
@@ -970,7 +970,7 @@ html {
   height: 360px;
   right: -110px;
   top: -150px;
-  background: rgba(228, 23, 57, 0.35);
+  background: rgba(37, 99, 235, 0.35);
   filter: blur(2px);
   border-radius: 50%;
 }
@@ -1109,7 +1109,7 @@ html {
 .contact-form textarea:focus {
   border-color: var(--teal);
   background: #fff;
-  box-shadow: 0 0 0 4px rgba(228, 23, 57, 0.09);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.09);
 }
 .contact-form ::placeholder {
   color: #818080;
@@ -1130,7 +1130,7 @@ html {
   align-items: center;
   gap: 8px;
   padding: 11px 13px;
-  color: #e41739;
+  color: #2563eb;
   background: var(--teal-soft);
   border-radius: 10px;
   font-size: 10px;
@@ -1167,7 +1167,7 @@ html {
   transition: color 0.2s;
 }
 .footer-grid a:hover {
-  color: #e41739;
+  color: #2563eb;
 }
 .socials {
   display: flex;
@@ -1202,7 +1202,7 @@ html {
   font-size: inherit;
 }
 .privacy-link:hover {
-  color: #e41739;
+  color: #2563eb;
 }
 .modal-backdrop {
   position: fixed;

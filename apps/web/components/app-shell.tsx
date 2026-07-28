@@ -5,11 +5,14 @@ import {
   BarChart3,
   BookOpen,
   Bot,
+  CalendarClock,
   ChevronDown,
+  ContactRound,
   Headphones,
   LayoutDashboard,
   LogOut,
   MessageSquareText,
+  PhoneCall,
   Radio,
   Settings,
   Users,
@@ -24,13 +27,11 @@ import type { AuthResponse } from "@/lib/types";
 
 const primaryNav = [
   { href: "/app", label: "Обзор", icon: LayoutDashboard },
+  { href: "/app/dialer", label: "Диалер", icon: PhoneCall },
+  { href: "/app/customers", label: "Клиенты", icon: ContactRound },
+  { href: "/app/callbacks", label: "Перезвоны", icon: CalendarClock },
   { href: "/app/ai-operators", label: "AI-операторы", icon: Bot },
   { href: "/app/knowledge", label: "База знаний", icon: BookOpen },
-  {
-    href: "/app/dev-simulator",
-    label: "Симулятор",
-    icon: MessageSquareText,
-  },
   { href: "/app/conversations", label: "Разговоры", icon: Headphones },
 ];
 
@@ -40,6 +41,11 @@ const secondaryNav = [
   { href: "/app/integrations", label: "Интеграции", icon: Wrench },
   { href: "/app/analytics", label: "Аналитика", icon: BarChart3 },
   { href: "/app/settings", label: "Настройки", icon: Settings },
+  {
+    href: "/app/dev-simulator",
+    label: "AI-симулятор",
+    icon: MessageSquareText,
+  },
 ];
 
 const roleLabels: Record<string, string> = {

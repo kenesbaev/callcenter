@@ -42,7 +42,7 @@ flowchart TD
     Metrics["Prometheus / Grafana"] -.-> API
     Metrics -.-> Gateway
     Metrics -.-> Worker
-    Future["Future: Kamailio + RTPengine"] -. "not installed in MVP" .-> PBX
+    Future["Scale tier: Kamailio + RTPengine"] -. "not installed in current baseline" .-> PBX
 ```
 
 The browser never receives provider keys or privileged tool handlers. The voice gateway owns realtime session state; the API owns identity, tenant authorization, durable business state, tool policy and audit.

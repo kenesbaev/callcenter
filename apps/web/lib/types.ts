@@ -61,12 +61,65 @@ export type Call = {
     "queued" | "ringing" | "active" | "transferring" | "completed" | "failed";
   language: string | null;
   customer_id: string | null;
+  operator_user_id: string | null;
   ai_operator_id: string | null;
+  direction: string;
+  provider: string;
+  from_number: string | null;
+  to_number: string | null;
   started_at: string | null;
+  answered_at: string | null;
   ended_at: string | null;
   duration_seconds: number;
   transfer_reason: string | null;
   is_demo: boolean;
+};
+
+export type CustomerContact = {
+  kind: "phone" | "email" | string;
+  value: string;
+  is_primary: boolean;
+};
+
+export type Customer = {
+  id: string;
+  display_name: string | null;
+  external_reference: string | null;
+  preferred_language: "ru" | "en" | "uz" | "kaa" | null;
+  status: string;
+  custom_fields: Record<string, unknown>;
+  contacts: CustomerContact[];
+  locked_by_user_id: string | null;
+  locked_until: string | null;
+  last_call_at: string | null;
+  next_call_at: string | null;
+  created_at: string;
+};
+
+export type CallbackTask = {
+  id: string;
+  customer_id: string;
+  customer_name: string | null;
+  customer_phone: string | null;
+  call_id: string | null;
+  assigned_user_id: string | null;
+  due_at: string;
+  status: string;
+  note: string;
+  completed_at: string | null;
+  created_at: string;
+};
+
+export type DialerAssignment = {
+  customer: Customer;
+  source: "callback" | "new";
+  callback_task_id: string | null;
+};
+
+export type CallResultResponse = {
+  call: Call;
+  customer_status: string;
+  callback_task_id: string | null;
 };
 
 export type CallDetail = Call & {

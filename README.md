@@ -2,7 +2,7 @@
 
 Мультитенантная платформа AI Call Center для компаний. Публичный продукт и интерфейс используют бренд K-Line; внутренние имена пакетов `@teamora/*` сохранены временно для совместимости.
 
-Current delivery status: the registration → tenant → operator → knowledge → text simulation → transcript → summary → dashboard slice is implemented and tested against PostgreSQL and Playwright. The dashboard also has tenant-scoped pages for active calls, team, integration readiness, analytics and settings. A simulator run is not a phone call. Live SIP, OpenAI, CRM, payment, Uzbek quality and Karakalpak quality are not claimed until their external verification gates pass. See the [production-readiness report](docs/production-readiness.md).
+Production is the target, not an MVP label. The registration → tenant → AI operator → knowledge → transcript → summary → dashboard flow and the customer → locked assignment → operator call → outcome → callback workflow are implemented against PostgreSQL with tenant RLS and automated tests. Mock telephony is restricted to development/test environments. Live SIP, OpenAI audio, recording, backup/restore, load, failover and security readiness are not claimed until their external verification gates pass. See the [production-readiness report](docs/production-readiness.md).
 
 ## Repository map
 

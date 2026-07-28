@@ -15,4 +15,4 @@ Templates are rendered at container start so secrets do not enter image layers o
 
 ARI External Media supports an RTP fallback. Media-over-WebSocket requires an Asterisk build that includes the relevant WebSocket channel/client support; confirm loaded modules and the exact version before selecting `ASTERISK_EXTERNAL_MEDIA_TRANSPORT=websocket`. The repository configuration is architectural preparation, not an end-to-end media verification.
 
-Production requirements include private ARI, TLS, immutable image pinning, certificate rotation, provider IP allowlists, OS hardening, fail2ban, monitored CDR anomalies, and a backup route. Kubernetes is intentionally out of scope for the MVP.
+Production requirements include private ARI, TLS, immutable image pinning, certificate rotation, provider IP allowlists, OS hardening, fail2ban, monitored CDR anomalies, a backup carrier route and a tested highly available deployment topology.

@@ -62,7 +62,7 @@ Deliverables:
 - transcript segments with per-segment language
 - deterministic development summary and usage calculation
 - dashboard aggregates with no production demo numbers
-- typed tool registry with safe MVP tools and audited executions
+- typed tool registry with allowlisted production tools and audited executions
 
 Exit gate: registration → tenant → AI operator → knowledge → simulated call → transcript → summary → dashboard works through real APIs and PostgreSQL.
 

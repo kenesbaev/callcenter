@@ -1,6 +1,6 @@
 # Deployment
 
-Docker Compose is the deployment unit for the MVP. Kubernetes is intentionally excluded.
+Docker Compose is the local and single-node reference deployment. A production release must use an approved highly available deployment design (for example Kubernetes or an equivalent orchestrator), immutable images, managed secrets and externally verified recovery procedures.
 
 1. Pin and scan every base image; never deploy mutable `latest` tags in a release manifest.
 2. Provide secrets from the environment/Vault/KMS, validate TLS certificates and keep data/voice networks private.
