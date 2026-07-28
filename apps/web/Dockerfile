@@ -12,6 +12,8 @@ FROM node:22-alpine AS builder
 WORKDIR /workspace
 COPY --from=dependencies /workspace/node_modules ./node_modules
 COPY . .
+ARG API_INTERNAL_URL=http://api:8000
+ENV API_INTERNAL_URL=${API_INTERNAL_URL}
 RUN npm run build --workspace @teamora/web
 
 FROM node:22-alpine AS runtime

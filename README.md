@@ -33,6 +33,11 @@ owned by their operator; stale new-customer leases can be reclaimed. Tenant, pro
 and operator concurrent-call limits are checked transactionally before a Mock call is
 created. See [the migration plan](docs/MIGRATION_PLAN.md) for completed and pending work.
 
+The standalone web image compiles Next.js rewrites during the Docker build. Its
+Dockerfile therefore defaults `API_INTERNAL_URL` to the Compose service address
+`http://api:8000`; deployments with a different internal API hostname must override
+that build argument.
+
 Start with [the implementation plan](docs/implementation-plan.md) and [architecture](docs/architecture.md).
 
 ## Требования
