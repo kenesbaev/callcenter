@@ -1728,6 +1728,17 @@ button:disabled {
   gap: 20px;
 }
 
+.dialer-project-select {
+  min-width: 220px;
+  margin-left: auto;
+}
+
+.dialer-project-select > span {
+  color: var(--tv-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .operator-state {
   display: flex;
   align-items: center;
@@ -2059,5 +2070,9 @@ button:disabled {
   .active-call-console {
     align-items: stretch;
     flex-direction: column;
+  }
+  .dialer-project-select {
+    width: 100%;
+    margin-left: 0;
   }
 }

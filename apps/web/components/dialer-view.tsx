@@ -17,7 +17,13 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button, StatusBadge } from "@teamora/ui";
 import { ApiClientError, apiRequest } from "@/lib/api";
-import type { Call, CallResultResponse, DialerAssignment } from "@/lib/types";
+import type {
+  Call,
+  CallResultResponse,
+  DialerAssignment,
+  Page,
+  Project,
+} from "@/lib/types";
 
 const resultSchema = z
   .object({
@@ -98,6 +104,19 @@ function primaryPhone(assignment: DialerAssignment | null | undefined) {
 export function DialerView() {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const projects = useQuery({
+    queryKey: ["projects", "dialer"],
+    queryFn: () =>
+      apiRequest<Page<Project>>("/projects?status=active&limit=100"),
+  });
+  useEffect(() => {
+    if (selectedProjectId || !projects.data?.items.length) return;
+    const defaultProject =
+      projects.data.items.find((project) => project.is_default) ??
+      projects.data.items[0];
+    setSelectedProjectId(defaultProject.id);
+  }, [projects.data, selectedProjectId]);
   const assignment = useQuery({
     queryKey: ["dialer", "current"],
     queryFn: () => apiRequest<DialerAssignment | null>("/dialer/current"),
@@ -125,9 +144,10 @@ export function DialerView() {
 
   const nextClient = useMutation({
     mutationFn: () =>
-      apiRequest<DialerAssignment | null>("/dialer/next-client", {
-        method: "POST",
-      }),
+      apiRequest<DialerAssignment | null>(
+        `/dialer/next-client${selectedProjectId ? `?project_id=${selectedProjectId}` : ""}`,
+        { method: "POST" },
+      ),
     onSuccess: (value) => {
       queryClient.setQueryData(["dialer", "current"], value);
       setMessage(
@@ -142,6 +162,7 @@ export function DialerView() {
         method: "POST",
         body: JSON.stringify({
           customer_id: assignment.data?.customer.id,
+          lock_token: assignment.data?.lock_token,
           callback_task_id: assignment.data?.callback_task_id,
           from_number: "MOCK",
         }),
@@ -199,6 +220,7 @@ export function DialerView() {
         `/dialer/customers/${assignment.data?.customer.id}/release`,
         {
           method: "POST",
+          body: JSON.stringify({ lock_token: assignment.data?.lock_token }),
         },
       ),
     onSuccess: () => {
@@ -213,6 +235,48 @@ export function DialerView() {
       error instanceof ApiClientError ? error.message : "Операция не выполнена",
     );
   }
+
+  useEffect(() => {
+    const current = assignment.data;
+    if (!current) return;
+    const heartbeat = () => {
+      void apiRequest<void>(
+        `/dialer/customers/${current.customer.id}/heartbeat`,
+        {
+          method: "POST",
+          body: JSON.stringify({ lock_token: current.lock_token }),
+        },
+      ).catch((error: unknown) => {
+        if (
+          error instanceof ApiClientError &&
+          error.code === "dialer_lease_lost"
+        ) {
+          queryClient.setQueryData(["dialer", "current"], null);
+          setMessage(error.message);
+        }
+      });
+    };
+    const timer = window.setInterval(heartbeat, 60_000);
+    return () => window.clearInterval(timer);
+  }, [assignment.data, queryClient]);
+
+  useEffect(() => {
+    const current = assignment.data;
+    if (!current) return;
+    const releaseOnPageExit = () => {
+      if (call) return;
+      void apiRequest<void>(
+        `/dialer/customers/${current.customer.id}/release`,
+        {
+          method: "POST",
+          body: JSON.stringify({ lock_token: current.lock_token }),
+          keepalive: true,
+        },
+      ).catch(() => undefined);
+    };
+    window.addEventListener("pagehide", releaseOnPageExit);
+    return () => window.removeEventListener("pagehide", releaseOnPageExit);
+  }, [assignment.data, call]);
 
   const customerHistory = useMemo(
     () =>
@@ -236,6 +300,21 @@ export function DialerView() {
           <h1>Рабочая станция оператора</h1>
           <p>Карточка клиента, звонок и результат в одном экране</p>
         </div>
+        <label className="field dialer-project-select">
+          <span>Проект</span>
+          <select
+            disabled={Boolean(assignment.data || call)}
+            onChange={(event) => setSelectedProjectId(event.target.value)}
+            value={selectedProjectId}
+          >
+            <option value="">Выберите проект</option>
+            {projects.data?.items.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="operator-state">
           <span className="presence-dot" />
           <div>

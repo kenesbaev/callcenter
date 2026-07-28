@@ -8,6 +8,7 @@ import {
   CalendarClock,
   ChevronDown,
   ContactRound,
+  FolderKanban,
   Headphones,
   LayoutDashboard,
   LogOut,
@@ -26,6 +27,7 @@ import { apiRequest, ApiClientError } from "@/lib/api";
 import type { AuthResponse } from "@/lib/types";
 
 const primaryNav = [
+  { href: "/app/projects", label: "Проекты", icon: FolderKanban },
   { href: "/app", label: "Обзор", icon: LayoutDashboard },
   { href: "/app/dialer", label: "Диалер", icon: PhoneCall },
   { href: "/app/customers", label: "Клиенты", icon: ContactRound },

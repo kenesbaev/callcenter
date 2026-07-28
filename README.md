@@ -19,6 +19,20 @@ docs                        architecture, security and operations
 tests                       cross-service and E2E tests
 ```
 
+## Project-scoped CRM workflow
+
+CRM data is separated first by tenant and then by project. Every tenant receives a
+default project during registration or migration. Customers, customer phone numbers,
+operator calls, callbacks, AI operators, and call-flow scripts carry a required
+`project_id`. A phone number is unique inside one project and may be reused in another
+project of the same company.
+
+The operator Dialer uses a PostgreSQL lease with `FOR UPDATE SKIP LOCKED`, a unique
+lease token, a 15-minute expiry, and a browser heartbeat. Assigned callbacks remain
+owned by their operator; stale new-customer leases can be reclaimed. Tenant, project,
+and operator concurrent-call limits are checked transactionally before a Mock call is
+created. See [the migration plan](docs/MIGRATION_PLAN.md) for completed and pending work.
+
 Start with [the implementation plan](docs/implementation-plan.md) and [architecture](docs/architecture.md).
 
 ## Требования

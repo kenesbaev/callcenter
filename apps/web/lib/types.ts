@@ -56,6 +56,7 @@ export type TranscriptSegment = {
 
 export type Call = {
   id: string;
+  project_id: string;
   channel: "sip" | "development_simulator";
   status:
     "queued" | "ringing" | "active" | "transferring" | "completed" | "failed";
@@ -83,6 +84,7 @@ export type CustomerContact = {
 
 export type Customer = {
   id: string;
+  project_id: string;
   display_name: string | null;
   external_reference: string | null;
   preferred_language: "ru" | "en" | "uz" | "kaa" | null;
@@ -98,6 +100,7 @@ export type Customer = {
 
 export type CallbackTask = {
   id: string;
+  project_id: string;
   customer_id: string;
   customer_name: string | null;
   customer_phone: string | null;
@@ -114,6 +117,21 @@ export type DialerAssignment = {
   customer: Customer;
   source: "callback" | "new";
   callback_task_id: string | null;
+  lock_token: string;
+};
+
+export type Project = {
+  id: string;
+  name: string;
+  description: string;
+  status: "active" | "paused" | "archived";
+  outbound_number: string | null;
+  max_concurrent_calls: number;
+  working_hours: Record<string, unknown>;
+  is_default: boolean;
+  operator_user_ids: string[];
+  created_at: string;
+  updated_at: string;
 };
 
 export type CallResultResponse = {

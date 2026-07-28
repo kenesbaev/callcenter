@@ -93,7 +93,13 @@ services:
     <<: *service-defaults
     build:
       context: ./services/api
+    ports:
+      - "127.0.0.1:8000:8000"
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: http://minio:9000
     depends_on:
       postgres:
         condition: service_healthy
@@ -170,8 +176,11 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+    ports:
+      - "127.0.0.1:3000:3000"
     environment:
       API_INTERNAL_URL: http://api:8000
+      HOSTNAME: 0.0.0.0
       NEXT_PUBLIC_APP_ENV: ${APP_ENV:?APP_ENV is required}
     depends_on:
       api:
@@ -189,6 +198,7 @@ services:
       retries: 20
     networks:
       - app
+      - dev-host
 
   nginx:
     <<: *service-defaults

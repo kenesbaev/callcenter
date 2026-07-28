@@ -3,15 +3,16 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, UserPlus, Users } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button, StatusBadge } from "@teamora/ui";
 import { ApiClientError, apiRequest } from "@/lib/api";
-import type { Customer, Page } from "@/lib/types";
+import type { Customer, Page, Project } from "@/lib/types";
 import { QueryError, SectionSkeleton } from "@/components/query-state";
 
 const customerSchema = z.object({
+  project_id: z.string().uuid("Выберите проект"),
   display_name: z.string().trim().min(2, "Введите имя клиента").max(160),
   phone: z
     .string()
@@ -46,6 +47,7 @@ export function CustomersView() {
   const form = useForm<CustomerForm>({
     resolver: zodResolver(customerSchema),
     defaultValues: {
+      project_id: "",
       display_name: "",
       phone: "+998",
       email: "",
@@ -53,6 +55,18 @@ export function CustomersView() {
       external_reference: "",
     },
   });
+  const projects = useQuery({
+    queryKey: ["projects"],
+    queryFn: () =>
+      apiRequest<Page<Project>>("/projects?status=active&limit=100"),
+  });
+  useEffect(() => {
+    if (form.getValues("project_id") || !projects.data?.items.length) return;
+    const defaultProject =
+      projects.data.items.find((project) => project.is_default) ??
+      projects.data.items[0];
+    form.setValue("project_id", defaultProject.id, { shouldValidate: true });
+  }, [form, projects.data]);
   const customers = useQuery({
     queryKey: ["customers", search],
     queryFn: () =>
@@ -74,6 +88,10 @@ export function CustomersView() {
       setSubmitError("");
       setFormOpen(false);
       form.reset();
+      const defaultProject =
+        projects.data?.items.find((project) => project.is_default) ??
+        projects.data?.items[0];
+      if (defaultProject) form.setValue("project_id", defaultProject.id);
       await queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
     onError: (error) =>
@@ -108,6 +126,22 @@ export function CustomersView() {
               createCustomer.mutate(value),
             )}
           >
+            <div className="field">
+              <label htmlFor="customer-project">Проект</label>
+              <select id="customer-project" {...form.register("project_id")}>
+                <option value="">Выберите проект</option>
+                {projects.data?.items.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+              {form.formState.errors.project_id && (
+                <small className="field-error">
+                  {form.formState.errors.project_id.message}
+                </small>
+              )}
+            </div>
             <div className="field">
               <label htmlFor="customer-name">Имя</label>
               <input id="customer-name" {...form.register("display_name")} />
