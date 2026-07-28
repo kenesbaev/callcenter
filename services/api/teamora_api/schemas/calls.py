@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -42,8 +43,14 @@ class CallRead(BaseModel):
     status: CallStatus
     language: LanguageCode | None
     customer_id: UUID | None
+    operator_user_id: UUID | None
     ai_operator_id: UUID | None
+    direction: str
+    provider: str
+    from_number: str | None
+    to_number: str | None
     started_at: datetime | None
+    answered_at: datetime | None
     ended_at: datetime | None
     duration_seconds: int
     transfer_reason: str | None
@@ -53,6 +60,34 @@ class CallRead(BaseModel):
 class CallDetail(CallRead):
     transcript: list[TranscriptSegmentRead]
     summary: CallSummaryRead | None
+
+
+class CallStartRequest(BaseModel):
+    customer_id: UUID
+    callback_task_id: UUID | None = None
+    from_number: str = Field(default="MOCK", min_length=2, max_length=32)
+
+
+class CallResultRequest(BaseModel):
+    result: Literal[
+        "success",
+        "no_answer",
+        "busy",
+        "callback",
+        "wrong_number",
+        "do_not_call",
+        "not_interested",
+        "failed",
+        "other",
+    ]
+    comment: str = Field(default="", max_length=4000)
+    callback_at: datetime | None = None
+
+
+class CallResultResponse(BaseModel):
+    call: CallRead
+    customer_status: str
+    callback_task_id: UUID | None = None
 
 
 class SimulatorMessageResponse(BaseModel):

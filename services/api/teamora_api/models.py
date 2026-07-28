@@ -327,6 +327,14 @@ class Customer(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     external_reference: Mapped[str | None] = mapped_column(String(160))
     preferred_language: Mapped[LanguageCode | None] = mapped_column(enum_type(LanguageCode))
     is_anonymized: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="new", nullable=False, index=True)
+    custom_fields: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    locked_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class CustomerContact(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -359,6 +367,9 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     customer_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("customers.id", ondelete="SET NULL"), index=True
     )
+    operator_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     ai_operator_id: Mapped[UUID | None] = mapped_column(ForeignKey("ai_operators.id", ondelete="SET NULL"))
     ai_operator_version_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("ai_operator_versions.id", ondelete="SET NULL")
@@ -368,6 +379,9 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    provider: Mapped[str] = mapped_column(String(40), default="mock", nullable=False)
+    from_number: Mapped[str | None] = mapped_column(String(32))
+    to_number: Mapped[str | None] = mapped_column(String(32))
     transfer_reason: Mapped[str | None] = mapped_column(String(500))
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -453,6 +467,21 @@ class CallOutcome(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     code: Mapped[str] = mapped_column(String(80), nullable=False)
     label: Mapped[str] = mapped_column(String(160), nullable=False)
     details: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+
+
+class CallbackTask(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "callback_tasks"
+    __table_args__ = (Index("ix_callback_tasks_tenant_status_due", "tenant_id", "status", "due_at"),)
+
+    customer_id: Mapped[UUID] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), index=True)
+    call_id: Mapped[UUID | None] = mapped_column(ForeignKey("calls.id", ondelete="SET NULL"), index=True)
+    assigned_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False, index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class HumanOperator(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

@@ -18,7 +18,10 @@ from teamora_api.middleware import CorrelationMiddleware, CSRFMiddleware, LocalR
 from teamora_api.routers import (
     analytics,
     auth,
+    callbacks,
     calls,
+    customers,
+    dialer,
     health,
     knowledge,
     operations,
@@ -67,6 +70,9 @@ app.include_router(health.router, prefix=api_v1_prefix)
 app.include_router(tenants.router, prefix=api_v1_prefix)
 app.include_router(operators.router, prefix=api_v1_prefix)
 app.include_router(knowledge.router, prefix=api_v1_prefix)
+app.include_router(customers.router, prefix=api_v1_prefix)
+app.include_router(callbacks.router, prefix=api_v1_prefix)
+app.include_router(dialer.router, prefix=api_v1_prefix)
 app.include_router(calls.router, prefix=api_v1_prefix)
 app.include_router(simulator.router, prefix=api_v1_prefix)
 app.include_router(analytics.router, prefix=api_v1_prefix)

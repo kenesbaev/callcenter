@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     def simulator_available(self) -> bool:
         return self.app_env == "development" and self.enable_call_simulator
 
+    @property
+    def mock_telephony_available(self) -> bool:
+        return self.app_env in {"development", "test"}
+
     @model_validator(mode="after")
     def reject_insecure_production_defaults(self) -> Settings:
         if self.app_env == "production":
