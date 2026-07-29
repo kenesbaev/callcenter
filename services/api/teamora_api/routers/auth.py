@@ -12,6 +12,7 @@ from teamora_api.dependencies import PrincipalDep, SessionDep
 from teamora_api.enums import LanguageCode, LanguageReadiness, RoleName, TenantStatus
 from teamora_api.errors import ApiError
 from teamora_api.models import (
+    CallResultCatalog,
     LanguageConfiguration,
     Membership,
     Project,
@@ -100,12 +101,20 @@ async def register(
             name="Основной проект",
             description="Основной проект компании",
             status="active",
-            max_concurrent_calls=get_settings().default_max_concurrent_calls,
+            max_concurrent_calls=None,
             working_hours={},
             is_default=True,
         )
         session.add(project)
         await session.flush()
+        session.add(
+            CallResultCatalog(
+                tenant_id=tenant.id,
+                project_id=project.id,
+                name="Результаты звонка",
+                is_active=True,
+            )
+        )
         session.add(
             ProjectUser(
                 tenant_id=tenant.id,

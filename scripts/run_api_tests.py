@@ -181,6 +181,7 @@ def main() -> int:
         {
             "APP_ENV": "test",
             "ENABLE_CALL_SIMULATOR": "true",
+            "RATE_LIMIT_REQUESTS_PER_MINUTE": "10000",
             "DATABASE_URL": rendered(app_url),
             "MIGRATION_DATABASE_URL": rendered(migration_url),
             "TEST_DATABASE_URL": rendered(app_url),

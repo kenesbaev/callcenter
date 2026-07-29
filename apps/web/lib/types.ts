@@ -21,6 +21,7 @@ export type Page<T> = {
 
 export type AiOperator = {
   id: string;
+  project_id: string;
   name: string;
   description: string;
   is_active: boolean;
@@ -125,13 +126,96 @@ export type Project = {
   name: string;
   description: string;
   status: "active" | "paused" | "archived";
+  default_language: "ru" | "en" | "uz" | "kaa" | null;
+  timezone: string | null;
   outbound_number: string | null;
-  max_concurrent_calls: number;
-  working_hours: Record<string, unknown>;
+  outbound_phone_number_id: string | null;
+  inbound_phone_number_ids: string[];
+  ai_operator_id: string | null;
+  knowledge_source_id: string | null;
+  call_flow_id: string | null;
+  call_result_catalog_id: string;
+  max_concurrent_calls: number | null;
+  effective_settings: ProjectEffectiveSettings;
+  working_hours: ProjectWorkingHours;
+  recording_enabled: boolean | null;
+  recording_disclosure_required: boolean | null;
+  max_attempts: number;
+  retry_intervals_minutes: number[];
+  callback_rules: ProjectCallbackRules;
   is_default: boolean;
+  archived_at: string | null;
   operator_user_ids: string[];
   created_at: string;
   updated_at: string;
+};
+
+export type ProjectEffectiveSettings = {
+  default_language: "ru" | "en" | "uz" | "kaa";
+  timezone: string;
+  max_concurrent_calls: number;
+  recording_enabled: boolean;
+  recording_disclosure_required: boolean;
+};
+
+export type ProjectWorkingDay = {
+  enabled: boolean;
+  start?: string | null;
+  end?: string | null;
+};
+
+export type ProjectWorkingHours = Partial<
+  Record<
+    | "monday"
+    | "tuesday"
+    | "wednesday"
+    | "thursday"
+    | "friday"
+    | "saturday"
+    | "sunday",
+    ProjectWorkingDay
+  >
+>;
+
+export type ProjectCallbackRules = {
+  default_delay_minutes: number;
+  max_schedule_days: number;
+  allow_operator_scheduling: boolean;
+  require_assignee: boolean;
+  overdue_first: boolean;
+};
+
+export type ProjectOptions = {
+  tenant_defaults: ProjectEffectiveSettings;
+  operators: Array<{
+    user_id: string;
+    display_name: string;
+    email: string;
+    role: Role;
+  }>;
+  phone_numbers: Array<{
+    id: string;
+    e164: string;
+    label: string;
+    is_active: boolean;
+  }>;
+  ai_operators: Array<{
+    id: string;
+    project_id: string;
+    name: string;
+    is_active: boolean;
+  }>;
+  knowledge_sources: Array<{
+    id: string;
+    name: string;
+    source_type: string;
+  }>;
+  call_flows: Array<{
+    id: string;
+    project_id: string;
+    name: string;
+    is_active: boolean;
+  }>;
 };
 
 export type CallResultResponse = {

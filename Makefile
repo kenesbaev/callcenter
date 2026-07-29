@@ -28,6 +28,7 @@ typecheck:
 test:
 	npm test
 	py -3.12 scripts/run_api_tests.py
+	py -3.12 scripts/run_project_migration_test.py
 	cd services/worker && py -3.12 -m pytest
 	py -3.12 scripts/run_e2e_tests.py
 

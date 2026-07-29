@@ -90,3 +90,38 @@ test("пять разделов ДАЛЕЕ открываются как реа�
   }
   await expect(page.getByText("Скоро")).toHaveCount(0);
 });
+
+test("владелец создаёт, редактирует и архивирует проект", async ({ page }) => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await page.goto("/register");
+  await page.getByLabel("Название компании").fill(`K-Line Projects ${suffix}`);
+  await page.getByLabel("Адрес компании").fill(`projects-${suffix}`);
+  await page.getByLabel("Ваше имя").fill("Владелец проектов");
+  await page.getByLabel("Рабочая почта").fill(`projects+${suffix}@example.com`);
+  await page.getByLabel("Пароль").fill("SecureProjects123!");
+  await page.getByRole("button", { name: "Создать компанию" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+
+  await page.getByRole("link", { name: "Проекты" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Проекты", level: 1, exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Новый проект" }).click();
+  await page.getByLabel("Название").fill(`Retention ${suffix}`);
+  await page
+    .getByLabel("Описание")
+    .fill("Проект для проверки полной конфигурации");
+  await page.getByRole("tab", { name: "Лимиты и правила" }).click();
+  await page.getByLabel("Одновременных звонков").fill("3");
+  await page.getByRole("button", { name: "Сохранить" }).click();
+  await expect(page.getByText("Сохранено")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: `Retention ${suffix}`, exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "В архив", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "В архив", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Архив").first()).toBeVisible();
+});

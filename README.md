@@ -108,6 +108,23 @@ with `npx playwright install --with-deps chromium`.
 
 The current stable Next.js release has upstream high-severity transitive audit findings. Do not deploy until a patched stable version is adopted and reverified.
 
+## Project configuration
+
+`/app/projects` is the project control center for tenant owners and managers. It
+configures status, language/timezone overrides, tenant-owned outbound and inbound
+numbers, project AI/call-flow links, a tenant knowledge source, assigned operators,
+working hours, recording/disclosure overrides, concurrent-call limits, retry policy,
+and callback defaults. Operators and analysts can read only the projects allowed by
+their role and project assignment; unavailable management controls are not rendered.
+
+Projects are archived instead of deleted. New projects receive an empty result catalog
+as an explicit extension point; configurable result definitions and the versioned
+scenario editor remain intentionally reserved for their later implementation stages.
+Run `py -3.12 scripts/run_project_migration_test.py` to verify that a project created at
+the previous Alembic head survives the Stage 2 migration with its existing values and
+receives its result catalog. The script only accepts local PostgreSQL and always removes
+its isolated test database.
+
 ## Language readiness
 
 | Language           | Status            | Rule                                                                       |

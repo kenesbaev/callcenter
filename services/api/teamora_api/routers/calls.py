@@ -160,7 +160,8 @@ async def reserve_call_capacity(
         )
         or 0
     )
-    if active_project_calls >= project.max_concurrent_calls:
+    project_limit = project.max_concurrent_calls or tenant_limit
+    if active_project_calls >= project_limit:
         raise ApiError(409, "project_call_limit", "Лимит одновременных звонков проекта исчерпан")
 
     operator_limit = await session.scalar(

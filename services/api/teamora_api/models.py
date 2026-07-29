@@ -118,9 +118,38 @@ class Project(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "projects"
     __table_args__ = (
         CheckConstraint("max_concurrent_calls > 0", name="max_concurrent_calls_positive"),
+        CheckConstraint("max_attempts > 0", name="max_attempts_positive"),
         CheckConstraint(
             "status IN ('active', 'paused', 'archived')",
             name="status_valid",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "outbound_phone_number_id"],
+            ["phone_numbers.tenant_id", "phone_numbers.id"],
+            name="fk_projects_tenant_outbound_phone_number_phone_numbers",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "ai_operator_id"],
+            ["ai_operators.tenant_id", "ai_operators.project_id", "ai_operators.id"],
+            name="fk_projects_tenant_project_ai_operator_ai_operators",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_source_id"],
+            ["knowledge_sources.tenant_id", "knowledge_sources.id"],
+            name="fk_projects_tenant_knowledge_source_knowledge_sources",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "call_flow_id"],
+            ["call_flows.tenant_id", "call_flows.project_id", "call_flows.id"],
+            name="fk_projects_tenant_project_call_flow_call_flows",
+            ondelete="RESTRICT",
+            use_alter=True,
         ),
         UniqueConstraint("tenant_id", "name", name="uq_projects_tenant_name"),
         UniqueConstraint("tenant_id", "id", name="uq_projects_tenant_id_id"),
@@ -136,10 +165,22 @@ class Project(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="active", nullable=False, index=True)
+    default_language: Mapped[LanguageCode | None] = mapped_column(enum_type(LanguageCode), nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(64))
     outbound_number: Mapped[str | None] = mapped_column(String(32))
-    max_concurrent_calls: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    outbound_phone_number_id: Mapped[UUID | None] = mapped_column(index=True)
+    ai_operator_id: Mapped[UUID | None] = mapped_column(index=True)
+    knowledge_source_id: Mapped[UUID | None] = mapped_column(index=True)
+    call_flow_id: Mapped[UUID | None] = mapped_column(index=True)
+    max_concurrent_calls: Mapped[int | None] = mapped_column(Integer, default=None)
     working_hours: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    recording_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    recording_disclosure_required: Mapped[bool | None] = mapped_column(Boolean)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    retry_intervals_minutes: Mapped[list[int]] = mapped_column(JSON, default=lambda: [15, 60], nullable=False)
+    callback_rules: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ProjectUser(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -162,6 +203,61 @@ class ProjectUser(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
     project_id: Mapped[UUID] = mapped_column(index=True)
     user_id: Mapped[UUID] = mapped_column(index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class ProjectInboundPhoneNumber(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "project_inbound_phone_numbers"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_project_inbound_numbers_tenant_project_projects",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "phone_number_id"],
+            ["phone_numbers.tenant_id", "phone_numbers.id"],
+            name="fk_project_inbound_numbers_tenant_phone_phone_numbers",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "phone_number_id",
+            name="uq_project_inbound_numbers_project_phone",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "phone_number_id",
+            name="uq_project_inbound_numbers_tenant_phone",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    phone_number_id: Mapped[UUID] = mapped_column(index=True)
+
+
+class CallResultCatalog(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "call_result_catalogs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_call_result_catalogs_tenant_project_projects",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "project_id", name="uq_call_result_catalogs_tenant_project"),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "id",
+            name="uq_call_result_catalogs_tenant_project_id",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    name: Mapped[str] = mapped_column(String(160), default="Результаты звонка", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
@@ -212,7 +308,10 @@ class SipCredentialReference(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class PhoneNumber(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "phone_numbers"
-    __table_args__ = (UniqueConstraint("e164"),)
+    __table_args__ = (
+        UniqueConstraint("e164"),
+        UniqueConstraint("tenant_id", "id", name="uq_phone_numbers_tenant_id_id"),
+    )
 
     sip_trunk_id: Mapped[UUID | None] = mapped_column(ForeignKey("sip_trunks.id", ondelete="SET NULL"))
     e164: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -262,6 +361,7 @@ class AiOperator(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             ondelete="RESTRICT",
         ),
         UniqueConstraint("project_id", "name", name="uq_ai_operators_project_name"),
+        UniqueConstraint("tenant_id", "project_id", "id", name="uq_ai_operators_tenant_project_id"),
     )
 
     project_id: Mapped[UUID] = mapped_column(index=True)
@@ -336,6 +436,7 @@ class CallFlow(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="fk_call_flows_tenant_project_projects",
             ondelete="RESTRICT",
         ),
+        UniqueConstraint("tenant_id", "project_id", "id", name="uq_call_flows_tenant_project_id"),
     )
 
 
@@ -352,6 +453,7 @@ class CallFlowVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class KnowledgeSource(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "knowledge_sources"
+    __table_args__ = (UniqueConstraint("tenant_id", "id", name="uq_knowledge_sources_tenant_id_id"),)
 
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     source_type: Mapped[str] = mapped_column(String(40), default="text")
