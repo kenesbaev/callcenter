@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS build
 WORKDIR /workspace
 COPY package.json package-lock.json ./
 COPY packages/config/package.json packages/config/package.json
@@ -12,7 +12,7 @@ COPY packages/contracts packages/contracts
 COPY services/voice-gateway services/voice-gateway
 RUN npm run build --workspace @teamora/voice-gateway
 
-FROM node:22-alpine AS runtime
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS runtime
 ENV NODE_ENV=production
 WORKDIR /workspace
 COPY --from=build /workspace/node_modules ./node_modules

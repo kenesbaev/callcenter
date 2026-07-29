@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import signal
 
-import redis.asyncio as redis
 import structlog
+from redis.asyncio import Redis
 
 from teamora_worker.config import get_settings
 from teamora_worker.jobs import JobEnvelope
@@ -22,7 +22,7 @@ log = structlog.get_logger(service="worker")
 
 async def run() -> None:
     settings = get_settings()
-    client = redis.from_url(settings.redis_url, decode_responses=True)
+    client = Redis.from_url(settings.redis_url, decode_responses=True)
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
 

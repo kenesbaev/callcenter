@@ -1,12 +1,12 @@
 import asyncio
 
-import redis.asyncio as redis
+from redis.asyncio import Redis
 
 from teamora_worker.config import get_settings
 
 
 async def check() -> None:
-    client = redis.from_url(get_settings().redis_url)
+    client = Redis.from_url(get_settings().redis_url)
     try:
         if not await client.ping():
             raise SystemExit(1)

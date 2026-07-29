@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import cast
 from uuid import UUID
 
 from fastapi import APIRouter, Request
@@ -12,7 +13,7 @@ from teamora_api.errors import ApiError
 from teamora_api.models import Membership, Project, ProjectUser
 from teamora_api.project_access import accessible_projects_statement, resolve_project
 from teamora_api.schemas.common import Page
-from teamora_api.schemas.projects import ProjectCreate, ProjectRead, ProjectUpdate
+from teamora_api.schemas.projects import ProjectCreate, ProjectRead, ProjectStatus, ProjectUpdate
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -22,7 +23,7 @@ def serialize_project(project: Project, operator_user_ids: list[UUID]) -> Projec
         id=project.id,
         name=project.name,
         description=project.description,
-        status=project.status,  # type: ignore[arg-type]
+        status=cast(ProjectStatus, project.status),
         outbound_number=project.outbound_number,
         max_concurrent_calls=project.max_concurrent_calls,
         working_hours=project.working_hours,

@@ -1,4 +1,4 @@
-FROM node:22-alpine AS dependencies
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS dependencies
 WORKDIR /workspace
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
@@ -8,7 +8,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/config/package.json packages/config/package.json
 RUN npm ci
 
-FROM node:22-alpine AS builder
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS builder
 WORKDIR /workspace
 COPY --from=dependencies /workspace/node_modules ./node_modules
 COPY . .
@@ -16,7 +16,7 @@ ARG API_INTERNAL_URL=http://api:8000
 ENV API_INTERNAL_URL=${API_INTERNAL_URL}
 RUN npm run build --workspace @teamora/web
 
-FROM node:22-alpine AS runtime
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS runtime
 ENV NODE_ENV=production
 RUN addgroup -S teamora && adduser -S teamora -G teamora
 WORKDIR /app

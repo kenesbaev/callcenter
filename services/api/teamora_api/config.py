@@ -60,7 +60,7 @@ class Settings(BaseSettings):
 
     @property
     def simulator_available(self) -> bool:
-        return self.app_env == "development" and self.enable_call_simulator
+        return self.app_env in {"development", "test"} and self.enable_call_simulator
 
     @property
     def mock_telephony_available(self) -> bool:

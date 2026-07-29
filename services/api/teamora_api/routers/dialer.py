@@ -90,29 +90,31 @@ async def current_task(
     customer_id: UUID,
     user_id: UUID,
 ) -> CallbackTask | None:
-    return await session.scalar(
-        select(CallbackTask)
-        .where(
-            CallbackTask.tenant_id == tenant_id,
-            CallbackTask.project_id == project_id,
-            CallbackTask.customer_id == customer_id,
-            or_(
-                and_(
-                    CallbackTask.status == "pending",
-                    or_(
-                        CallbackTask.assigned_user_id.is_(None),
+    return (
+        await session.scalars(
+            select(CallbackTask)
+            .where(
+                CallbackTask.tenant_id == tenant_id,
+                CallbackTask.project_id == project_id,
+                CallbackTask.customer_id == customer_id,
+                or_(
+                    and_(
+                        CallbackTask.status == "pending",
+                        or_(
+                            CallbackTask.assigned_user_id.is_(None),
+                            CallbackTask.assigned_user_id == user_id,
+                        ),
+                    ),
+                    and_(
+                        CallbackTask.status == "in_progress",
                         CallbackTask.assigned_user_id == user_id,
                     ),
                 ),
-                and_(
-                    CallbackTask.status == "in_progress",
-                    CallbackTask.assigned_user_id == user_id,
-                ),
-            ),
+            )
+            .order_by(CallbackTask.due_at)
+            .limit(1)
         )
-        .order_by(CallbackTask.due_at)
-        .limit(1)
-    )
+    ).first()
 
 
 async def assigned_customer(
@@ -140,18 +142,20 @@ async def assigned_customer(
         )
         .exists()
     )
-    return await session.scalar(
-        select(Customer).where(
-            Customer.tenant_id == principal.tenant_id,
-            Customer.project_id.in_(project_ids),
-            Customer.locked_by_user_id == principal.user_id,
-            or_(
-                Customer.locked_until > now,
-                unresolved_call,
-            ),
-            Customer.is_anonymized.is_(False),
+    return (
+        await session.scalars(
+            select(Customer).where(
+                Customer.tenant_id == principal.tenant_id,
+                Customer.project_id.in_(project_ids),
+                Customer.locked_by_user_id == principal.user_id,
+                or_(
+                    Customer.locked_until > now,
+                    unresolved_call,
+                ),
+                Customer.is_anonymized.is_(False),
+            )
         )
-    )
+    ).first()
 
 
 async def renew_assignment(

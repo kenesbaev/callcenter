@@ -27,7 +27,9 @@ typecheck:
 
 test:
 	npm test
-	py -3.12 -m pytest services/api/tests services/worker/tests
+	py -3.12 scripts/run_api_tests.py
+	cd services/worker && py -3.12 -m pytest
+	py -3.12 scripts/run_e2e_tests.py
 
 migrate:
 	py -3.12 -m alembic -c services/api/alembic.ini upgrade head

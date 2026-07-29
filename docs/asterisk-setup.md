@@ -1,6 +1,8 @@
 # Asterisk setup
 
-The local `telephony` Compose profile builds a minimal Asterisk image with PJSIP, ARI, DID routing, queue policy, CDR, recording volume and a bounded RTP range. It is excluded from the default startup.
+The local `telephony` Compose profile builds the Ubuntu 24.04 LTS package of Asterisk
+20 with PJSIP, ARI, DID routing, queue policy, CDR, recording volume and a bounded RTP
+range. It is excluded from the default startup.
 
 ```powershell
 docker compose --profile telephony config

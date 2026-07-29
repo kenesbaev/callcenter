@@ -9,7 +9,7 @@ x-service-defaults: &service-defaults
 services:
   postgres:
     <<: *service-defaults
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
@@ -32,7 +32,7 @@ services:
 
   redis:
     <<: *service-defaults
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     volumes:
       - redis-data:/data
@@ -49,7 +49,7 @@ services:
 
   minio:
     <<: *service-defaults
-    image: minio/minio:latest
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: server /data --console-address :9001
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
@@ -70,7 +70,7 @@ services:
       - dev-host
 
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     restart: "no"
     depends_on:
       minio:
@@ -129,6 +129,8 @@ services:
       context: .
       dockerfile: services/worker/Dockerfile
     env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,6 +151,9 @@ services:
       context: .
       dockerfile: services/voice-gateway/Dockerfile
     env_file: .env
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       api:
         condition: service_healthy
@@ -202,7 +207,7 @@ services:
 
   nginx:
     <<: *service-defaults
-    image: nginx:1.27-alpine
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     ports:
       - "8080:8080"
     volumes:
@@ -248,7 +253,7 @@ services:
   mailpit:
     <<: *service-defaults
     profiles: ["dev-tools"]
-    image: axllent/mailpit:latest
+    image: axllent/mailpit@sha256:7f33095f80e901f6ad08028f06ca284aa58fe84942be5496008d041d3b9f4d4d
     ports:
       - "127.0.0.1:8025:8025"
     networks:
@@ -257,7 +262,7 @@ services:
   prometheus:
     <<: *service-defaults
     profiles: ["monitoring"]
-    image: prom/prometheus:latest
+    image: prom/prometheus@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893
     command:
       [
         "--config.file=/etc/prometheus/prometheus.yml",
@@ -273,7 +278,7 @@ services:
   grafana:
     <<: *service-defaults
     profiles: ["monitoring"]
-    image: grafana/grafana:latest
+    image: grafana/grafana@sha256:1c1bd67c54c5fcf6e759897852b5a584191bd6796e8d328a5ace457799801261
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?GRAFANA_ADMIN_USER is required}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}

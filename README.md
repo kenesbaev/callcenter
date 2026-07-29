@@ -78,17 +78,33 @@ npm run format:check
 npm run lint
 npm run typecheck
 npm test
-npm run test:e2e
 py -3.12 -m ruff format --check services/api services/worker
 py -3.12 -m ruff check services/api services/worker
 py -3.12 -m mypy services/api/teamora_api services/worker/teamora_worker
-py -3.12 -m pytest services/api/tests services/worker/tests
+py -3.12 scripts/run_api_tests.py
+Push-Location services/worker; py -3.12 -m pytest; Pop-Location
+py -3.12 scripts/run_e2e_tests.py
 py -3.12 -m alembic -c services/api/alembic.ini check
 docker compose ps
 npm audit --omit=dev
 ```
 
-`npm run test:e2e` starts isolated development servers on ports `8100` and `3100`, uses the installed Microsoft Edge channel locally, and checks the complete vertical flow plus the five dashboard sections. PostgreSQL, Redis and MinIO must already be healthy. In CI, install the official Playwright browser first with `npx playwright install --with-deps chromium`.
+`scripts/run_api_tests.py` refuses staging/production and non-local database URLs,
+creates a separate `*_pytest` PostgreSQL database, applies Alembic to it, runs the API
+suite through the restricted application role, and drops the database even when tests
+fail. Direct API pytest execution is fail-closed unless `APP_ENV=test`, `DATABASE_URL`
+and `TEST_DATABASE_URL` identify the same explicitly local test database. Optional
+`TEST_DATABASE_URL` and `TEST_MIGRATION_DATABASE_URL` values may override the derived
+URLs without being committed.
+
+`scripts/run_e2e_tests.py` creates and later removes an isolated local PostgreSQL
+database, then starts Playwright development servers on ports `8100` and `3100`.
+Direct Playwright execution is fail-closed unless `E2E_DATABASE_URL` and
+`E2E_MIGRATION_DATABASE_URL` reference a local database ending in `_test` or
+`_pytest`. The runner uses the installed Microsoft Edge channel locally and checks
+the complete vertical flow plus the five dashboard sections. PostgreSQL, Redis and
+MinIO must already be healthy. In CI, install the official Playwright browser first
+with `npx playwright install --with-deps chromium`.
 
 The current stable Next.js release has upstream high-severity transitive audit findings. Do not deploy until a patched stable version is adopted and reverified.
 
