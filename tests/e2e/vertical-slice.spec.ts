@@ -125,3 +125,48 @@ test("владелец создаёт, редактирует и архивир�
   ).toHaveCount(0);
   await expect(page.getByText("Архив").first()).toBeVisible();
 });
+
+test("владелец создаёт клиента с телефоном и e-mail, архивирует и восстанавливает", async ({
+  page,
+}) => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const customerName = `Клиент E2E ${suffix}`;
+
+  await page.goto("/register");
+  await page.getByLabel("Название компании").fill(`K-Line Customers ${suffix}`);
+  await page.getByLabel("Адрес компании").fill(`customers-${suffix}`);
+  await page.getByLabel("Ваше имя").fill("Владелец клиентской базы");
+  await page
+    .getByLabel("Рабочая почта")
+    .fill(`customers+${suffix}@example.com`);
+  await page.getByLabel("Пароль").fill("SecureCustomers123!");
+  await page.getByRole("button", { name: "Создать компанию" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+
+  await page.getByRole("link", { name: "Клиенты" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Клиенты", level: 1 }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Новый клиент" }).click();
+  await page.getByLabel("ФИО").fill(customerName);
+  await page.getByLabel("Телефон 1").fill("+998 90 123 45 67");
+  await page.getByRole("button", { name: "E-mail", exact: true }).click();
+  await page.getByLabel("E-mail 2").fill(`client+${suffix}@example.com`);
+  await page.getByLabel("Теги через запятую").fill("VIP, E2E");
+  await page.getByRole("button", { name: "Сохранить клиента" }).click();
+
+  await expect(page.getByText("Клиент создан")).toBeVisible();
+  await expect(page.getByText(customerName).first()).toBeVisible();
+  await expect(page.getByText("+998901234567").first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Архивировать" }).click();
+  await expect(page.getByText("Клиент архивирован")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Восстановить" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Восстановить" }).click();
+  await expect(page.getByText("Клиент восстановлен")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Архивировать" }),
+  ).toBeVisible();
+});

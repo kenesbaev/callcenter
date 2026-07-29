@@ -9,13 +9,20 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from teamora_api.audit import write_audit
+from teamora_api.customer_service import contacts_for_customers, serialize_customer
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import CallStatus
 from teamora_api.errors import ApiError
-from teamora_api.models import Call, CallbackTask, CallOutcome, Customer, TenantSettings
+from teamora_api.models import (
+    Call,
+    CallbackTask,
+    CallOutcome,
+    Customer,
+    CustomerContact,
+    TenantSettings,
+)
 from teamora_api.project_access import accessible_project_ids, resolve_project
 from teamora_api.routers.calls import serialize_call
-from teamora_api.routers.customers import contacts_for_customers, serialize_customer
 from teamora_api.schemas.calls import CallRead
 from teamora_api.schemas.crm import DialerAssignment, DialerLeaseRequest
 
@@ -61,6 +68,19 @@ def active_customer_call() -> ColumnElement[bool]:
             Call.tenant_id == Customer.tenant_id,
             Call.customer_id == Customer.id,
             Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+        )
+        .exists()
+    )
+
+
+def customer_has_callable_phone() -> ColumnElement[bool]:
+    return (
+        select(CustomerContact.id)
+        .where(
+            CustomerContact.tenant_id == Customer.tenant_id,
+            CustomerContact.project_id == Customer.project_id,
+            CustomerContact.customer_id == Customer.id,
+            CustomerContact.kind == "phone",
         )
         .exists()
     )
@@ -153,6 +173,8 @@ async def assigned_customer(
                     unresolved_call,
                 ),
                 Customer.is_anonymized.is_(False),
+                Customer.archived_at.is_(None),
+                customer_has_callable_phone(),
             )
         )
     ).first()
@@ -250,6 +272,8 @@ async def next_client(
                 Customer.tenant_id == principal.tenant_id,
                 Customer.project_id == project.id,
                 Customer.is_anonymized.is_(False),
+                Customer.archived_at.is_(None),
+                customer_has_callable_phone(),
                 Customer.status != "do_not_call",
                 available_lock,
                 ~active_customer_call(),
@@ -287,6 +311,8 @@ async def next_client(
                 Customer.tenant_id == principal.tenant_id,
                 Customer.project_id == project.id,
                 Customer.is_anonymized.is_(False),
+                Customer.archived_at.is_(None),
+                customer_has_callable_phone(),
                 or_(
                     Customer.status == "new",
                     and_(

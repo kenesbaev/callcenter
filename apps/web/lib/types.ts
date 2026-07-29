@@ -78,8 +78,10 @@ export type Call = {
 };
 
 export type CustomerContact = {
+  id: string;
   kind: "phone" | "email" | string;
   value: string;
+  label: string | null;
   is_primary: boolean;
 };
 
@@ -90,13 +92,85 @@ export type Customer = {
   external_reference: string | null;
   preferred_language: "ru" | "en" | "uz" | "kaa" | null;
   status: string;
+  city: string | null;
+  region: string | null;
+  address: string | null;
+  job_title: string | null;
+  organization: string | null;
+  tags: string[];
+  description: string;
+  source: string | null;
+  assigned_user_id: string | null;
   custom_fields: Record<string, unknown>;
   contacts: CustomerContact[];
   locked_by_user_id: string | null;
   locked_until: string | null;
   last_call_at: string | null;
   next_call_at: string | null;
+  next_contact_at: string | null;
+  archived_at: string | null;
   created_at: string;
+  updated_at: string;
+};
+
+export type CustomerFieldType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "boolean"
+  | "date"
+  | "datetime"
+  | "select"
+  | "multiselect";
+
+export type CustomerFieldDefinition = {
+  id: string;
+  project_id: string;
+  name: string;
+  key: string;
+  field_type: CustomerFieldType;
+  is_required: boolean;
+  sort_order: number;
+  options: string[];
+  default_value: unknown;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CustomerImportRow = {
+  row_number: number;
+  values: Record<string, unknown>;
+  duplicate_fields: string[];
+  errors: string[];
+};
+
+export type CustomerImportPreview = {
+  id: string;
+  project_id: string;
+  file_name: string;
+  file_type: string;
+  sheet_names: string[];
+  selected_sheet: string;
+  headers: string[];
+  mapping: Record<string, string>;
+  update_rule: "skip" | "update";
+  total_rows: number;
+  valid_rows: number;
+  duplicate_rows: number;
+  error_rows: number;
+  rows: CustomerImportRow[];
+  expires_at: string;
+};
+
+export type CustomerImportReport = {
+  import_id: string;
+  created: number;
+  updated: number;
+  skipped: number;
+  duplicates: number;
+  errors: Array<{ row_number: number; messages: string[] }>;
+  committed_at: string;
 };
 
 export type CallbackTask = {

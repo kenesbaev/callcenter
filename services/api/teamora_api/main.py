@@ -20,6 +20,7 @@ from teamora_api.routers import (
     auth,
     callbacks,
     calls,
+    customer_imports,
     customers,
     dialer,
     health,
@@ -72,6 +73,7 @@ app.include_router(tenants.router, prefix=api_v1_prefix)
 app.include_router(operators.router, prefix=api_v1_prefix)
 app.include_router(projects.router, prefix=api_v1_prefix)
 app.include_router(knowledge.router, prefix=api_v1_prefix)
+app.include_router(customer_imports.router, prefix=api_v1_prefix)
 app.include_router(customers.router, prefix=api_v1_prefix)
 app.include_router(callbacks.router, prefix=api_v1_prefix)
 app.include_router(dialer.router, prefix=api_v1_prefix)

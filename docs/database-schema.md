@@ -54,3 +54,11 @@ enforced by the partial index `uq_customer_contacts_project_phone` for `kind = '
 `customers.lock_token`, `locked_by_user_id`, and `locked_until` form the Dialer lease.
 The token must be presented when starting a call, renewing a lease, or releasing a
 customer. This prevents a stale browser tab from releasing a newer assignment.
+
+Stage 3 extends `customers` and `customer_contacts` instead of creating a parallel CRM
+domain. Customer contacts use normalized project-scoped uniqueness, while the global
+`phone_numbers.e164` constraint is intentionally retained for DID/SIP inbound routing.
+`customer_field_definitions` owns typed project field definitions, and
+`customer_imports` stores short-lived preview state plus an idempotent commit report.
+Archived customers retain their contacts and call history but are excluded from Dialer
+assignment.

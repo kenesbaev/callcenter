@@ -13,6 +13,7 @@ from teamora_api.enums import LanguageCode, LanguageReadiness, RoleName, TenantS
 from teamora_api.errors import ApiError
 from teamora_api.models import (
     CallResultCatalog,
+    CustomerFieldDefinition,
     LanguageConfiguration,
     Membership,
     Project,
@@ -120,6 +121,19 @@ async def register(
                 tenant_id=tenant.id,
                 project_id=project.id,
                 user_id=user.id,
+                is_active=True,
+            )
+        )
+        session.add(
+            CustomerFieldDefinition(
+                tenant_id=tenant.id,
+                project_id=project.id,
+                name="Сегмент",
+                key="segment",
+                field_type="text",
+                is_required=False,
+                sort_order=0,
+                options=[],
                 is_active=True,
             )
         )

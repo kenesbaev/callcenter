@@ -199,6 +199,12 @@ class ProjectUser(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             ondelete="CASCADE",
         ),
         UniqueConstraint("project_id", "user_id", name="uq_project_users_project_user"),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "user_id",
+            name="uq_project_users_tenant_project_user",
+        ),
     )
 
     project_id: Mapped[UUID] = mapped_column(index=True)
@@ -499,22 +505,6 @@ class KnowledgeSyncJob(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 class Customer(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "customers"
 
-    project_id: Mapped[UUID] = mapped_column(index=True)
-
-    display_name: Mapped[str | None] = mapped_column(String(160))
-    external_reference: Mapped[str | None] = mapped_column(String(160))
-    preferred_language: Mapped[LanguageCode | None] = mapped_column(enum_type(LanguageCode))
-    is_anonymized: Mapped[bool] = mapped_column(Boolean, default=False)
-    status: Mapped[str] = mapped_column(String(32), default="new", nullable=False, index=True)
-    custom_fields: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
-    locked_by_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), index=True
-    )
-    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-    lock_token: Mapped[UUID | None] = mapped_column(index=True)
-    last_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    next_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-
     __table_args__ = (
         ForeignKeyConstraint(
             ["tenant_id", "project_id"],
@@ -522,13 +512,63 @@ class Customer(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="fk_customers_tenant_project_projects",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "assigned_user_id"],
+            ["project_users.tenant_id", "project_users.project_id", "project_users.user_id"],
+            name="fk_customers_tenant_project_assigned_user_project_users",
+            ondelete="SET NULL (assigned_user_id)",
+            use_alter=True,
+        ),
         UniqueConstraint(
             "tenant_id",
             "project_id",
             "id",
             name="uq_customers_tenant_project_id",
         ),
+        Index(
+            "uq_customers_tenant_project_external_reference",
+            "tenant_id",
+            "project_id",
+            "external_reference_normalized",
+            unique=True,
+            postgresql_where=text("external_reference_normalized IS NOT NULL"),
+        ),
+        Index(
+            "ix_customers_tenant_project_status_archived",
+            "tenant_id",
+            "project_id",
+            "status",
+            "archived_at",
+        ),
+        Index("ix_customers_tenant_assigned_user", "tenant_id", "assigned_user_id"),
     )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+
+    display_name: Mapped[str | None] = mapped_column(String(160))
+    external_reference: Mapped[str | None] = mapped_column(String(160))
+    external_reference_normalized: Mapped[str | None] = mapped_column(String(160))
+    preferred_language: Mapped[LanguageCode | None] = mapped_column(enum_type(LanguageCode))
+    is_anonymized: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="new", nullable=False, index=True)
+    city: Mapped[str | None] = mapped_column(String(160))
+    region: Mapped[str | None] = mapped_column(String(160))
+    address: Mapped[str | None] = mapped_column(String(500))
+    job_title: Mapped[str | None] = mapped_column(String(160))
+    organization: Mapped[str | None] = mapped_column(String(200))
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source: Mapped[str | None] = mapped_column(String(120))
+    assigned_user_id: Mapped[UUID | None] = mapped_column(index=True)
+    custom_fields: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    locked_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lock_token: Mapped[UUID | None] = mapped_column(index=True)
+    last_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class CustomerContact(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -546,12 +586,24 @@ class CustomerContact(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="fk_customer_contacts_tenant_project_customer",
             ondelete="CASCADE",
         ),
+        CheckConstraint("kind IN ('phone', 'email')", name="kind_valid"),
         Index(
-            "uq_customer_contacts_project_phone",
+            "uq_customer_contacts_project_kind_value",
+            "tenant_id",
             "project_id",
+            "kind",
             "normalized_value",
             unique=True,
-            postgresql_where=text("kind = 'phone'"),
+            postgresql_where=text("kind IN ('phone', 'email')"),
+        ),
+        Index(
+            "uq_customer_contacts_primary_kind",
+            "tenant_id",
+            "project_id",
+            "customer_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("is_primary"),
         ),
     )
 
@@ -560,7 +612,99 @@ class CustomerContact(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
     normalized_value: Mapped[str] = mapped_column(String(320), nullable=False)
     display_value: Mapped[str] = mapped_column(String(320), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(80))
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class CustomerFieldDefinition(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "customer_field_definitions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_customer_field_definitions_tenant_project_projects",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "field_type IN ('text', 'textarea', 'number', 'boolean', 'date', 'datetime', "
+            "'select', 'multiselect')",
+            name="field_type_valid",
+        ),
+        CheckConstraint("sort_order >= 0", name="sort_order_non_negative"),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "key",
+            name="uq_customer_field_definitions_project_key",
+        ),
+        Index(
+            "ix_customer_field_definitions_project_active_order",
+            "tenant_id",
+            "project_id",
+            "is_active",
+            "sort_order",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    key: Mapped[str] = mapped_column(String(80), nullable=False)
+    field_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    options: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    default_value: Mapped[object | None] = mapped_column(JSON)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class CustomerImport(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "customer_imports"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_customer_imports_tenant_project_projects",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_customer_imports_tenant_creator_memberships",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "status IN ('preview', 'committed', 'expired')",
+            name="status_valid",
+        ),
+        CheckConstraint(
+            "update_rule IN ('skip', 'update')",
+            name="update_rule_valid",
+        ),
+        Index(
+            "uq_customer_imports_tenant_idempotency_key",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index("ix_customer_imports_tenant_project_status", "tenant_id", "project_id", "status"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    created_by_user_id: Mapped[UUID] = mapped_column(index=True)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_type: Mapped[str] = mapped_column(String(8), nullable=False)
+    sheet_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    selected_sheet: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_rows: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    mapping: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+    update_rule: Mapped[str] = mapped_column(String(16), default="skip", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="preview", nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    report: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CustomerNote(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

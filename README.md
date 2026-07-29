@@ -125,6 +125,28 @@ the previous Alembic head survives the Stage 2 migration with its existing value
 receives its result catalog. The script only accepts local PostgreSQL and always removes
 its isolated test database.
 
+## Customer management
+
+`/app/customers` provides the tenant owner and manager with a project-scoped customer
+workspace: profile fields, multiple normalized phone numbers and e-mail addresses,
+primary contacts, tags, responsible project operator, the next contact date, archive
+and restore actions, search, filters and pagination. Project custom-field definitions
+support text, textarea, number, boolean, date, datetime, select and multiselect values;
+the API validates every value against the customer's own tenant and project.
+
+CSV/XLSX import uses a two-step preview/commit flow. Preview validates the file and
+mapping without creating customers. Commit requires an `Idempotency-Key`, skips invalid
+rows, and only updates duplicates when the user explicitly selects the update rule.
+Synchronous imports are limited to 2 MB and 500 data rows per sheet; larger background
+imports remain reserved for the Worker stage.
+
+Client contacts are stored in `customer_contacts` and are unique within their tenant,
+project, kind and normalized value. `phone_numbers.e164` remains globally unique because
+that separate table contains telephony DID/SIP routing numbers. Run
+`py -3.12 scripts/run_customer_migration_test.py` to verify preservation of a legacy
+customer, its contact, call history and custom-field values across the Stage 3 migration.
+The script only accepts a local PostgreSQL test database and removes it after completion.
+
 ## Language readiness
 
 | Language           | Status            | Rule                                                                       |

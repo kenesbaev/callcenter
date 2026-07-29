@@ -220,6 +220,7 @@ async def start_call(
             Customer.locked_by_user_id == principal.user_id,
             Customer.locked_until > now,
             Customer.lock_token == payload.lock_token,
+            Customer.archived_at.is_(None),
         )
     )
     if customer is None:
@@ -228,13 +229,15 @@ async def start_call(
     if capacity_call is not None:
         return serialize_call(capacity_call)
     phone = await session.scalar(
-        select(CustomerContact).where(
+        select(CustomerContact)
+        .where(
             CustomerContact.tenant_id == principal.tenant_id,
             CustomerContact.project_id == customer.project_id,
             CustomerContact.customer_id == customer.id,
             CustomerContact.kind == "phone",
-            CustomerContact.is_primary.is_(True),
         )
+        .order_by(CustomerContact.is_primary.desc(), CustomerContact.created_at)
+        .limit(1)
     )
     if phone is None:
         raise ApiError(409, "customer_phone_missing", "У клиента отсутствует основной телефон")
