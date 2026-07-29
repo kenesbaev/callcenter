@@ -17,7 +17,9 @@ import {
   Save,
   Settings2,
   Users,
+  Workflow,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -588,6 +590,15 @@ export function ProjectsView() {
                     {saved && (
                       <StatusBadge tone="success">Сохранено</StatusBadge>
                     )}
+                    {!creating && selectedProject && (
+                      <Link
+                        className="tv-button tv-button-secondary"
+                        href={`/app/projects/${selectedProject.id}/flow`}
+                      >
+                        <Workflow size={16} />
+                        Сценарий
+                      </Link>
+                    )}
                     {!creating &&
                       selectedProject &&
                       !selectedProject.is_default &&
@@ -812,7 +823,7 @@ function ProjectEditorFields({
           <small>
             {creating
               ? "Сценарий назначается после первого сохранения проекта."
-              : "Редактор и публикация версий будут добавлены на Этапе 4."}
+              : "Редактор открывается кнопкой «Сценарий» в заголовке проекта."}
           </small>
         </FormField>
       </div>

@@ -606,7 +606,7 @@ def merged_contacts(
                 if value.id == current.id:
                     result[index] = CustomerContactInput(
                         id=current.id,
-                        kind=cast(ContactKind, contact.kind),
+                        kind=contact.kind,
                         value=contact.display_value,
                         label=contact.label or current.label,
                         is_primary=contact.is_primary or current.is_primary,
@@ -615,7 +615,7 @@ def merged_contacts(
         else:
             result.append(
                 CustomerContactInput(
-                    kind=cast(ContactKind, contact.kind),
+                    kind=contact.kind,
                     value=contact.display_value,
                     label=contact.label,
                     is_primary=contact.is_primary,

@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from teamora_api.call_flow_service import active_version_for_project
 from teamora_api.domain.knowledge import search_knowledge
 from teamora_api.enums import (
     CallChannel,
@@ -173,6 +174,11 @@ async def create_simulated_call(
             raise ApiError(404, "customer_not_found", "Customer was not found")
 
     now = datetime.now(UTC)
+    call_flow_version = await active_version_for_project(
+        session,
+        tenant_id=tenant_id,
+        project_id=operator.project_id,
+    )
     call = Call(
         tenant_id=tenant_id,
         project_id=operator.project_id,
@@ -183,6 +189,7 @@ async def create_simulated_call(
         customer_id=customer.id,
         ai_operator_id=ai_operator_id,
         ai_operator_version_id=version.id,
+        call_flow_version_id=call_flow_version.id if call_flow_version else None,
         language=language,
         started_at=now,
         answered_at=now,

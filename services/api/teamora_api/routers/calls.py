@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import and_, func, or_, select
 
 from teamora_api.audit import write_audit
+from teamora_api.call_flow_service import active_version_for_project
 from teamora_api.config import get_settings
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import CallChannel, CallStatus
@@ -50,6 +51,7 @@ def serialize_call(call: Call) -> CallRead:
         customer_id=call.customer_id,
         operator_user_id=call.operator_user_id,
         ai_operator_id=call.ai_operator_id,
+        call_flow_version_id=call.call_flow_version_id,
         direction=call.direction,
         provider=call.provider,
         from_number=call.from_number,
@@ -241,6 +243,11 @@ async def start_call(
     )
     if phone is None:
         raise ApiError(409, "customer_phone_missing", "У клиента отсутствует основной телефон")
+    call_flow_version = await active_version_for_project(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=customer.project_id,
+    )
 
     callback: CallbackTask | None = None
     if payload.callback_task_id:
@@ -266,6 +273,7 @@ async def start_call(
         direction="outbound",
         customer_id=customer.id,
         operator_user_id=principal.user_id,
+        call_flow_version_id=call_flow_version.id if call_flow_version else None,
         language=customer.preferred_language,
         started_at=now,
         provider="mock",

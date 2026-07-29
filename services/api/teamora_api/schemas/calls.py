@@ -46,6 +46,7 @@ class CallRead(BaseModel):
     customer_id: UUID | None
     operator_user_id: UUID | None
     ai_operator_id: UUID | None
+    call_flow_version_id: UUID | None
     direction: str
     provider: str
     from_number: str | None

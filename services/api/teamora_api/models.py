@@ -425,15 +425,12 @@ class CallFlow(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     project_id: Mapped[UUID] = mapped_column(index=True)
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    active_version_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey(
-            "call_flow_versions.id",
-            ondelete="SET NULL",
-            use_alter=True,
-            name="fk_call_flows_active_version_id_call_flow_versions",
-        )
-    )
+    description: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
+    default_language_code: Mapped[str] = mapped_column(String(32), default="ru", nullable=False)
+    language_codes: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["ru"], nullable=False)
+    active_version_id: Mapped[UUID | None] = mapped_column(index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -442,18 +439,84 @@ class CallFlow(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="fk_call_flows_tenant_project_projects",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "id", "active_version_id"],
+            [
+                "call_flow_versions.tenant_id",
+                "call_flow_versions.project_id",
+                "call_flow_versions.call_flow_id",
+                "call_flow_versions.id",
+            ],
+            name="fk_call_flows_active_version_same_flow",
+            ondelete="SET NULL (active_version_id)",
+            use_alter=True,
+        ),
         UniqueConstraint("tenant_id", "project_id", "id", name="uq_call_flows_tenant_project_id"),
+        Index(
+            "ix_call_flows_tenant_project_archived",
+            "tenant_id",
+            "project_id",
+            "archived_at",
+        ),
     )
 
 
 class CallFlowVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "call_flow_versions"
-    __table_args__ = (UniqueConstraint("call_flow_id", "version"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "call_flow_id"],
+            ["call_flows.tenant_id", "call_flows.project_id", "call_flows.id"],
+            name="fk_call_flow_versions_tenant_project_flow",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("call_flow_id", "version"),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "id",
+            name="uq_call_flow_versions_tenant_project_id",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "call_flow_id",
+            "id",
+            name="uq_call_flow_versions_tenant_project_flow_id",
+        ),
+        CheckConstraint("lock_version >= 1", name="lock_version_positive"),
+        Index(
+            "uq_call_flow_versions_single_draft",
+            "tenant_id",
+            "call_flow_id",
+            unique=True,
+            postgresql_where=text("status = 'draft'"),
+        ),
+        Index(
+            "ix_call_flow_versions_flow_status_version",
+            "tenant_id",
+            "call_flow_id",
+            "status",
+            "version",
+        ),
+    )
 
-    call_flow_id: Mapped[UUID] = mapped_column(ForeignKey("call_flows.id", ondelete="CASCADE"))
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    call_flow_id: Mapped[UUID] = mapped_column(index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[OperatorVersionStatus] = mapped_column(enum_type(OperatorVersionStatus))
-    definition: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    status: Mapped[OperatorVersionStatus] = mapped_column(
+        enum_type(OperatorVersionStatus), default=OperatorVersionStatus.DRAFT
+    )
+    definition: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_from_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "call_flow_versions.id",
+            ondelete="SET NULL",
+            name="fk_call_flow_versions_created_from_version",
+        ),
+        index=True,
+    )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -734,6 +797,7 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     ai_operator_version_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("ai_operator_versions.id", ondelete="SET NULL")
     )
+    call_flow_version_id: Mapped[UUID | None] = mapped_column(index=True)
     language: Mapped[LanguageCode | None] = mapped_column(enum_type(LanguageCode))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -750,6 +814,16 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             ["tenant_id", "project_id"],
             ["projects.tenant_id", "projects.id"],
             name="fk_calls_tenant_project_projects",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "call_flow_version_id"],
+            [
+                "call_flow_versions.tenant_id",
+                "call_flow_versions.project_id",
+                "call_flow_versions.id",
+            ],
+            name="fk_calls_tenant_project_call_flow_version",
             ondelete="RESTRICT",
         ),
         UniqueConstraint("tenant_id", "external_call_id"),

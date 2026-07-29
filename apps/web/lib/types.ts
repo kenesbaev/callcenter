@@ -65,6 +65,7 @@ export type Call = {
   customer_id: string | null;
   operator_user_id: string | null;
   ai_operator_id: string | null;
+  call_flow_version_id?: string | null;
   direction: string;
   provider: string;
   from_number: string | null;
@@ -75,6 +76,111 @@ export type Call = {
   duration_seconds: number;
   transfer_reason: string | null;
   is_demo: boolean;
+};
+
+export type CallFlowNodeType =
+  | "start"
+  | "operator_text"
+  | "customer_question"
+  | "info_hint"
+  | "choice"
+  | "value_input"
+  | "update_customer_field"
+  | "create_task"
+  | "create_callback"
+  | "transfer_request"
+  | "end";
+
+export type CallFlowAnswer = {
+  id: string;
+  key: string;
+  label_by_language: Record<string, string>;
+  next_node_id: string | null;
+  is_required: boolean;
+};
+
+export type CallFlowNode = {
+  id: string;
+  system_key: string;
+  name: string;
+  node_type: CallFlowNodeType;
+  text_by_language: Record<string, string>;
+  hint_by_language: Record<string, string>;
+  order: number;
+  is_required: boolean;
+  customer_field_definition_id: string | null;
+  answers: CallFlowAnswer[];
+  next_node_id: string | null;
+  fallback_node_id: string | null;
+  action_config: Record<string, unknown>;
+};
+
+export type CallFlowDefinition = {
+  schema_version: 1;
+  nodes: CallFlowNode[];
+};
+
+export type CallFlowVersionSummary = {
+  id: string;
+  version: number;
+  status: "draft" | "published" | "archived";
+  lock_version: number;
+  created_from_version_id: string | null;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CallFlow = {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string;
+  default_language_code: string;
+  language_codes: string[];
+  active_version_id: string | null;
+  is_active: boolean;
+  archived_at: string | null;
+  versions: CallFlowVersionSummary[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type CallFlowVersion = CallFlowVersionSummary & {
+  call_flow_id: string;
+  project_id: string;
+  definition: CallFlowDefinition;
+};
+
+export type CallFlowValidationIssue = {
+  code: string;
+  message: string;
+  node_id: string | null;
+  node_name: string | null;
+};
+
+export type CallFlowValidation = {
+  valid: boolean;
+  errors: CallFlowValidationIssue[];
+};
+
+export type CallFlowPreviewNode = {
+  id: string;
+  system_key: string;
+  name: string;
+  node_type: CallFlowNodeType;
+  text: string;
+  hint: string;
+  answers: Array<{ key: string; label: string }>;
+  action_is_inert: boolean;
+};
+
+export type CallFlowPreview = {
+  language_code: string;
+  path: CallFlowPreviewNode[];
+  current_node: CallFlowPreviewNode | null;
+  completed: boolean;
+  inert_actions: string[];
 };
 
 export type CustomerContact = {

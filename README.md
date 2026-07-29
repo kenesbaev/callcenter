@@ -118,8 +118,8 @@ and callback defaults. Operators and analysts can read only the projects allowed
 their role and project assignment; unavailable management controls are not rendered.
 
 Projects are archived instead of deleted. New projects receive an empty result catalog
-as an explicit extension point; configurable result definitions and the versioned
-scenario editor remain intentionally reserved for their later implementation stages.
+as an explicit extension point; configurable result definitions remain reserved for
+their later implementation stage.
 Run `py -3.12 scripts/run_project_migration_test.py` to verify that a project created at
 the previous Alembic head survives the Stage 2 migration with its existing values and
 receives its result catalog. The script only accepts local PostgreSQL and always removes
@@ -146,6 +146,26 @@ that separate table contains telephony DID/SIP routing numbers. Run
 `py -3.12 scripts/run_customer_migration_test.py` to verify preservation of a legacy
 customer, its contact, call history and custom-field values across the Stage 3 migration.
 The script only accepts a local PostgreSQL test database and removes it after completion.
+
+## Call-flow editor
+
+`/app/projects/{project_id}/flow` provides a tenant- and project-scoped scenario editor.
+It stores typed nodes in immutable version snapshots, supports validated language codes,
+branch transitions, field references, safe action definitions and a read-only preview.
+Language codes are normalized to lowercase BCP 47 form: `ka` is Georgian, while
+Karakalpak uses `kaa` (including variants such as `kaa-latn` and `kaa-cyrl`). Existing
+data is never rewritten from `ka` unless its Karakalpak provenance is explicitly known.
+Only a draft can be edited. Publishing runs full graph validation in one transaction;
+published versions are immutable, and a subsequent edit starts as a copied draft with
+an optimistic `lock_version` check. A Call records its exact published
+`call_flow_version_id`; a project without a published flow continues through Dialer
+without a script.
+
+Preview never creates calls or changes customers, callbacks, tasks or transfers. The
+action nodes are deliberately marked inert until their execution stages are implemented.
+Run `py -3.12 scripts/run_call_flow_migration_test.py` to verify preservation and
+project backfill of pre-Stage-4 flows, versions, project links and call history. The
+script only accepts local PostgreSQL and removes its isolated database after completion.
 
 ## Language readiness
 

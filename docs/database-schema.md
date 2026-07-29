@@ -62,3 +62,16 @@ domain. Customer contacts use normalized project-scoped uniqueness, while the gl
 `customer_imports` stores short-lived preview state plus an idempotent commit report.
 Archived customers retain their contacts and call history but are excluded from Dialer
 assignment.
+
+## Call-flow version boundary
+
+Stage 4 extends the existing `call_flows` and `call_flow_versions` tables. Every version
+now carries its non-null `project_id`, a positive optimistic `lock_version`, and an
+optional `created_from_version_id`. Composite foreign keys keep the flow, version and
+project inside one tenant/project boundary. A partial unique index permits only one
+draft per flow, while published and archived snapshots remain immutable.
+
+The active version foreign key includes `(tenant_id, project_id, call_flow_id, id)`, so
+a flow cannot select a version from another flow. `calls.call_flow_version_id` uses the
+same tenant/project boundary and preserves the exact published snapshot used when the
+call started. Existing calls are migrated with a null snapshot and remain readable.
