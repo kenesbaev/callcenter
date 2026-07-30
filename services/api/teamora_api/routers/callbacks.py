@@ -3,17 +3,32 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from sqlalchemy import and_, func, select
 
 from teamora_api.audit import write_audit
 from teamora_api.dependencies import Principal, SessionDep, require_permission
-from teamora_api.enums import RoleName
+from teamora_api.enums import (
+    RoleName,
+    TaskEventType,
+    TaskPriority,
+    TaskSource,
+    TaskStatus,
+    TaskType,
+)
 from teamora_api.errors import ApiError
 from teamora_api.models import CallbackTask, Customer, CustomerContact
 from teamora_api.project_access import resolve_project
 from teamora_api.schemas.common import Page
 from teamora_api.schemas.crm import CallbackCreate, CallbackRead
+from teamora_api.task_service import (
+    acquire_task_command,
+    append_task_event,
+    create_task_record,
+    store_task_command,
+    sync_customer_callback_state,
+    task_command_fingerprint,
+)
 
 router = APIRouter(prefix="/callbacks", tags=["callbacks"])
 
@@ -31,7 +46,7 @@ def serialize_callback(
         assigned_user_id=task.assigned_user_id,
         due_at=task.due_at,
         status=task.status,
-        note=task.note,
+        note=task.comment,
         completed_at=task.completed_at,
         created_at=task.created_at,
     )
@@ -60,6 +75,7 @@ async def callback_row(
             .where(
                 CallbackTask.tenant_id == tenant_id,
                 CallbackTask.id == task_id,
+                CallbackTask.task_type == TaskType.CALLBACK,
                 *(
                     [CallbackTask.assigned_user_id == assigned_user_id]
                     if assigned_user_id is not None
@@ -84,7 +100,10 @@ async def list_callbacks(
 ) -> Page[CallbackRead]:
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
-    filters = [CallbackTask.tenant_id == principal.tenant_id]
+    filters = [
+        CallbackTask.tenant_id == principal.tenant_id,
+        CallbackTask.task_type == TaskType.CALLBACK,
+    ]
     if project_id is not None:
         project = await resolve_project(session, principal, project_id, active_only=False)
         filters.append(CallbackTask.project_id == project.id)
@@ -127,6 +146,7 @@ async def create_callback(
     request: Request,
     session: SessionDep,
     principal: Principal = require_permission("callbacks:manage"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
 ) -> CallbackRead:
     if payload.due_at.tzinfo is None:
         raise ApiError(422, "callback_timezone_required", "Дата перезвона должна содержать часовой пояс")
@@ -153,19 +173,33 @@ async def create_callback(
             "customer_not_assigned",
             "Оператор может создать перезвон только для назначенного клиента",
         )
-    task = CallbackTask(
+    fingerprint = task_command_fingerprint("legacy_callback_create", payload.model_dump(mode="json"))
+    replay = await acquire_task_command(
+        session,
+        tenant_id=principal.tenant_id,
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+    )
+    if replay is not None:
+        return CallbackRead.model_validate(replay.response_payload)
+    task = await create_task_record(
+        session,
         tenant_id=principal.tenant_id,
         project_id=customer.project_id,
         customer_id=customer.id,
-        assigned_user_id=principal.user_id,
+        created_by_user_id=principal.user_id,
+        task_type=TaskType.CALLBACK,
+        title="Перезвон клиенту",
+        description=payload.note,
+        priority=TaskPriority.NORMAL,
         due_at=due_at,
-        status="pending",
-        note=payload.note.strip(),
+        assigned_user_id=principal.user_id,
+        source=TaskSource.MANUAL,
+        correlation_id=request.state.correlation_id,
+        comment=payload.note,
+        idempotency_key=idempotency_key,
     )
-    customer.status = "callback"
-    customer.next_call_at = task.due_at
-    session.add(task)
-    await session.flush()
+    await sync_customer_callback_state(session, tenant_id=principal.tenant_id, customer=customer)
     await write_audit(
         session,
         tenant_id=principal.tenant_id,
@@ -179,8 +213,17 @@ async def create_callback(
     row = await callback_row(session, principal.tenant_id, task.id)
     if row is None:
         raise ApiError(500, "callback_read_failed", "Не удалось прочитать созданную задачу")
+    response = serialize_callback(*row)
+    store_task_command(
+        session,
+        task=task,
+        operation="legacy_callback_create",
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+        response_payload=response.model_dump(mode="json"),
+    )
     await session.commit()
-    return serialize_callback(*row)
+    return response
 
 
 @router.post("/{task_id}/complete", response_model=CallbackRead)
@@ -189,7 +232,17 @@ async def complete_callback(
     request: Request,
     session: SessionDep,
     principal: Principal = require_permission("callbacks:manage"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
 ) -> CallbackRead:
+    fingerprint = task_command_fingerprint("legacy_callback_complete", {"task_id": str(task_id)})
+    replay = await acquire_task_command(
+        session,
+        tenant_id=principal.tenant_id,
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+    )
+    if replay is not None:
+        return CallbackRead.model_validate(replay.response_payload)
     row = await callback_row(
         session,
         principal.tenant_id,
@@ -199,12 +252,21 @@ async def complete_callback(
     if row is None:
         raise ApiError(404, "callback_not_found", "Задача на перезвон не найдена")
     task, customer, contact = row
-    if task.status != "completed":
-        task.status = "completed"
+    if task.status != TaskStatus.COMPLETED:
+        if task.status == TaskStatus.CANCELLED:
+            raise ApiError(409, "callback_cancelled", "Отменённый перезвон нельзя завершить")
+        task.status = TaskStatus.COMPLETED
         task.completed_at = datetime.now(UTC)
-        customer.next_call_at = None
-        if customer.status == "callback":
-            customer.status = "completed"
+        task.cancelled_at = None
+        await append_task_event(
+            session,
+            task=task,
+            event_type=TaskEventType.COMPLETED,
+            actor_user_id=principal.user_id,
+            correlation_id=request.state.correlation_id,
+            safe_snapshot={"compatibility_api": True},
+        )
+        await sync_customer_callback_state(session, tenant_id=principal.tenant_id, customer=customer)
         await write_audit(
             session,
             tenant_id=principal.tenant_id,
@@ -214,5 +276,14 @@ async def complete_callback(
             resource_id=task.id,
             correlation_id=request.state.correlation_id,
         )
-        await session.commit()
-    return serialize_callback(task, customer, contact)
+    response = serialize_callback(task, customer, contact)
+    store_task_command(
+        session,
+        task=task,
+        operation="legacy_callback_complete",
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+        response_payload=response.model_dump(mode="json"),
+    )
+    await session.commit()
+    return response

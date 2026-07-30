@@ -11,6 +11,7 @@ import {
   FolderKanban,
   Headphones,
   LayoutDashboard,
+  ListTodo,
   LogOut,
   MessageSquareText,
   PhoneCall,
@@ -24,13 +25,26 @@ import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { TeamoraLogo } from "@teamora/ui";
 import { apiRequest, ApiClientError } from "@/lib/api";
-import type { AuthResponse } from "@/lib/types";
+import type { AuthResponse, Role } from "@/lib/types";
 
-const primaryNav = [
+const taskRoles: Role[] = [
+  "tenant_owner",
+  "tenant_manager",
+  "human_operator",
+  "analyst",
+];
+
+const primaryNav: Array<{
+  href: string;
+  label: string;
+  icon: typeof FolderKanban;
+  roles?: Role[];
+}> = [
   { href: "/app/projects", label: "Проекты", icon: FolderKanban },
   { href: "/app", label: "Обзор", icon: LayoutDashboard },
   { href: "/app/dialer", label: "Диалер", icon: PhoneCall },
   { href: "/app/customers", label: "Клиенты", icon: ContactRound },
+  { href: "/app/tasks", label: "Задачи", icon: ListTodo, roles: taskRoles },
   { href: "/app/callbacks", label: "Перезвоны", icon: CalendarClock },
   { href: "/app/ai-operators", label: "AI-операторы", icon: Bot },
   { href: "/app/knowledge", label: "База знаний", icon: BookOpen },
@@ -120,24 +134,28 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Link>
         <div className="sidebar-section-label">Кабинет</div>
         <nav className="sidebar-nav">
-          {primaryNav.map((item) => {
-            const active =
-              item.href === "/app"
-                ? pathname === item.href
-                : pathname.startsWith(item.href);
-            const Icon = item.icon;
-            return (
-              <Link
-                aria-current={active ? "page" : undefined}
-                className={`sidebar-link${active ? " active" : ""}`}
-                href={item.href}
-                key={item.href}
-              >
-                <Icon aria-hidden="true" size={17} />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
+          {primaryNav
+            .filter(
+              (item) => !item.roles || item.roles.includes(me.data.user.role),
+            )
+            .map((item) => {
+              const active =
+                item.href === "/app"
+                  ? pathname === item.href
+                  : pathname.startsWith(item.href);
+              const Icon = item.icon;
+              return (
+                <Link
+                  aria-current={active ? "page" : undefined}
+                  className={`sidebar-link${active ? " active" : ""}`}
+                  href={item.href}
+                  key={item.href}
+                >
+                  <Icon aria-hidden="true" size={17} />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
         </nav>
         <div className="sidebar-section-label">Далее</div>
         <div className="sidebar-nav">

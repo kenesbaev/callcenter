@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, CheckCircle2, Clock3 } from "lucide-react";
 import { useState } from "react";
+import Link from "next/link";
 import { Button, StatusBadge } from "@teamora/ui";
 import { apiRequest } from "@/lib/api";
 import type { CallbackTask, Page } from "@/lib/types";
@@ -53,7 +54,14 @@ export function CallbacksView() {
           <h1>Перезвоны</h1>
           <p>Просроченные задачи автоматически идут первыми в диалер</p>
         </div>
-        <StatusBadge tone="warning">{tasks.data?.total ?? 0} задач</StatusBadge>
+        <div className="callback-heading-actions">
+          <StatusBadge tone="warning">
+            {tasks.data?.total ?? 0} задач
+          </StatusBadge>
+          <Link className="tv-button tv-button-secondary" href="/app/tasks">
+            Все задачи
+          </Link>
+        </div>
       </div>
       <section className="panel">
         <div className="filter-tabs" role="tablist" aria-label="Статусы задач">

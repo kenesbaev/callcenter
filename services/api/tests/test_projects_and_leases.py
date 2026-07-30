@@ -9,7 +9,7 @@ from sqlalchemy import select
 from teamora_api.db import SessionFactory, set_tenant_context
 from teamora_api.enums import RoleName
 from teamora_api.main import app
-from teamora_api.models import Customer, Membership, Project, ProjectUser, User
+from teamora_api.models import CallbackTask, Customer, Membership, Project, ProjectUser, User
 from teamora_api.security import hash_password
 
 
@@ -160,6 +160,13 @@ async def test_operator_cannot_take_callback_assigned_to_another_user(
         },
     )
     assert response.status_code == 201, response.text
+    async with SessionFactory.begin() as session:
+        await set_tenant_context(session, tenant_id)
+        task = await session.scalar(
+            select(CallbackTask).where(CallbackTask.id == UUID(response.json()["id"]))
+        )
+        assert task is not None
+        task.due_at = datetime.now(UTC) - timedelta(minutes=1)
 
     email, password = await add_operator(tenant_id=tenant_id, suffix=unique_suffix)
     transport = ASGITransport(app=app)

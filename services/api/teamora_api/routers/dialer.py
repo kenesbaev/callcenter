@@ -5,13 +5,13 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, case, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from teamora_api.audit import write_audit
 from teamora_api.customer_service import contacts_for_customers, serialize_customer
 from teamora_api.dependencies import Principal, SessionDep, require_permission
-from teamora_api.enums import CallStatus
+from teamora_api.enums import CallStatus, TaskEventType, TaskStatus, TaskType
 from teamora_api.errors import ApiError
 from teamora_api.models import (
     Call,
@@ -24,17 +24,23 @@ from teamora_api.models import (
 from teamora_api.project_access import accessible_project_ids, resolve_project
 from teamora_api.routers.calls import serialize_call
 from teamora_api.schemas.calls import CallRead
-from teamora_api.schemas.crm import DialerAssignment, DialerLeaseRequest
+from teamora_api.schemas.crm import DialerAssignment, DialerLeaseRequest, DialerTaskSummary
+from teamora_api.task_service import append_task_event
 
 router = APIRouter(prefix="/dialer", tags=["dialer"])
 LOCK_MINUTES = 15
 
 
-async def end_of_tenant_day(session: SessionDep, tenant_id: UUID, now: datetime) -> datetime:
+async def start_of_project_day(
+    session: SessionDep,
+    tenant_id: UUID,
+    project_timezone: str | None,
+    now: datetime,
+) -> datetime:
     settings = await session.scalar(select(TenantSettings).where(TenantSettings.tenant_id == tenant_id))
-    zone = ZoneInfo(settings.timezone if settings else "Asia/Tashkent")
+    zone = ZoneInfo(project_timezone or (settings.timezone if settings else "Asia/Tashkent"))
     local_now = now.astimezone(zone)
-    return datetime.combine(local_now.date(), time.max, tzinfo=zone).astimezone(UTC)
+    return datetime.combine(local_now.date(), time.min, tzinfo=zone).astimezone(UTC)
 
 
 def unresolved_operator_call(
@@ -91,14 +97,46 @@ async def assignment(
     tenant_id: UUID,
     customer: Customer,
     task: CallbackTask | None,
+    user_id: UUID,
 ) -> DialerAssignment:
     if customer.lock_token is None:
         raise ApiError(500, "dialer_lease_missing", "Не удалось создать безопасную блокировку клиента")
     grouped = await contacts_for_customers(session, tenant_id, [customer.id])
+    pending_tasks = list(
+        await session.scalars(
+            select(CallbackTask)
+            .where(
+                CallbackTask.tenant_id == tenant_id,
+                CallbackTask.customer_id == customer.id,
+                CallbackTask.status.in_([TaskStatus.PENDING, TaskStatus.IN_PROGRESS]),
+                or_(
+                    CallbackTask.assigned_user_id.is_(None),
+                    CallbackTask.assigned_user_id == user_id,
+                ),
+            )
+            .order_by(CallbackTask.due_at, CallbackTask.created_at)
+            .limit(20)
+        )
+    )
+
+    def task_summary(value: CallbackTask) -> DialerTaskSummary:
+        return DialerTaskSummary(
+            id=value.id,
+            task_type=value.task_type.value,
+            title=value.title,
+            priority=value.priority.value,
+            status=value.status.value,
+            due_at=value.due_at,
+            comment=value.comment,
+            assigned_user_id=value.assigned_user_id,
+        )
+
     return DialerAssignment(
         customer=serialize_customer(customer, grouped[customer.id]),
         source="callback" if task else "new",
         callback_task_id=task.id if task else None,
+        task=task_summary(task) if task else None,
+        pending_tasks=[task_summary(value) for value in pending_tasks],
         lock_token=customer.lock_token,
     )
 
@@ -117,16 +155,17 @@ async def current_task(
                 CallbackTask.tenant_id == tenant_id,
                 CallbackTask.project_id == project_id,
                 CallbackTask.customer_id == customer_id,
+                CallbackTask.task_type == TaskType.CALLBACK,
                 or_(
                     and_(
-                        CallbackTask.status == "pending",
+                        CallbackTask.status == TaskStatus.PENDING,
                         or_(
                             CallbackTask.assigned_user_id.is_(None),
                             CallbackTask.assigned_user_id == user_id,
                         ),
                     ),
                     and_(
-                        CallbackTask.status == "in_progress",
+                        CallbackTask.status == TaskStatus.IN_PROGRESS,
                         CallbackTask.assigned_user_id == user_id,
                     ),
                 ),
@@ -196,7 +235,7 @@ async def renew_assignment(
         customer.id,
         principal.user_id,
     )
-    response = await assignment(session, principal.tenant_id, customer, task)
+    response = await assignment(session, principal.tenant_id, customer, task, principal.user_id)
     await session.commit()
     return response
 
@@ -257,7 +296,7 @@ async def next_client(
 
     project = await resolve_project(session, principal, project_id)
     available_lock = or_(Customer.locked_until.is_(None), Customer.locked_until <= now)
-    due_before = await end_of_tenant_day(session, principal.tenant_id, now)
+    day_start = await start_of_project_day(session, principal.tenant_id, project.timezone, now)
     callback_row = (
         await session.execute(
             select(Customer, CallbackTask)
@@ -279,31 +318,57 @@ async def next_client(
                 ~active_customer_call(),
                 CallbackTask.tenant_id == principal.tenant_id,
                 CallbackTask.project_id == project.id,
+                CallbackTask.task_type == TaskType.CALLBACK,
                 or_(
                     and_(
-                        CallbackTask.status == "pending",
+                        CallbackTask.status == TaskStatus.PENDING,
                         or_(
                             CallbackTask.assigned_user_id.is_(None),
                             CallbackTask.assigned_user_id == principal.user_id,
                         ),
                     ),
                     and_(
-                        CallbackTask.status == "in_progress",
+                        CallbackTask.status == TaskStatus.IN_PROGRESS,
                         CallbackTask.assigned_user_id == principal.user_id,
                     ),
                 ),
-                CallbackTask.due_at <= due_before,
+                CallbackTask.due_at <= now,
             )
-            .order_by(CallbackTask.due_at, CallbackTask.created_at)
-            .with_for_update(of=Customer, skip_locked=True)
+            .order_by(
+                case(
+                    (
+                        and_(
+                            CallbackTask.assigned_user_id == principal.user_id,
+                            CallbackTask.due_at < day_start,
+                        ),
+                        0,
+                    ),
+                    (CallbackTask.assigned_user_id == principal.user_id, 1),
+                    else_=2,
+                ),
+                CallbackTask.due_at,
+                CallbackTask.created_at,
+            )
+            .with_for_update(of=(Customer, CallbackTask), skip_locked=True)
             .limit(1)
         )
     ).one_or_none()
     task: CallbackTask | None = None
     if callback_row:
         customer, task = callback_row
+        task_was_pending = task.status == TaskStatus.PENDING
         task.assigned_user_id = principal.user_id
-        task.status = "in_progress"
+        task.status = TaskStatus.IN_PROGRESS
+        if task.started_at is None:
+            task.started_at = now
+        await append_task_event(
+            session,
+            task=task,
+            event_type=(TaskEventType.STARTED if task_was_pending else TaskEventType.UPDATED),
+            actor_user_id=principal.user_id,
+            correlation_id=request.state.correlation_id,
+            safe_snapshot={"source": "dialer", "recovered": not task_was_pending},
+        )
     else:
         customer = await session.scalar(
             select(Customer)
@@ -327,7 +392,8 @@ async def next_client(
                     CallbackTask.tenant_id == principal.tenant_id,
                     CallbackTask.project_id == project.id,
                     CallbackTask.customer_id == Customer.id,
-                    CallbackTask.status.in_(["pending", "in_progress"]),
+                    CallbackTask.task_type == TaskType.CALLBACK,
+                    CallbackTask.status.in_([TaskStatus.PENDING, TaskStatus.IN_PROGRESS]),
                 )
                 .exists(),
             )
@@ -355,7 +421,7 @@ async def next_client(
             "project_id": str(project.id),
         },
     )
-    response = await assignment(session, principal.tenant_id, customer, task)
+    response = await assignment(session, principal.tenant_id, customer, task, principal.user_id)
     await session.commit()
     return response
 
@@ -419,8 +485,16 @@ async def release_customer(
         customer.id,
         principal.user_id,
     )
-    if task is not None and task.status == "in_progress":
-        task.status = "pending"
+    if task is not None and task.status == TaskStatus.IN_PROGRESS:
+        task.status = TaskStatus.PENDING
+        await append_task_event(
+            session,
+            task=task,
+            event_type=TaskEventType.UPDATED,
+            actor_user_id=principal.user_id,
+            correlation_id=request.state.correlation_id,
+            safe_snapshot={"dialer_released": True},
+        )
     customer.status = "callback" if task else "new"
     customer.locked_by_user_id = None
     customer.locked_until = None

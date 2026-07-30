@@ -11,7 +11,7 @@ from sqlalchemy import select
 from teamora_api.db import SessionFactory, set_tenant_context
 from teamora_api.enums import RoleName
 from teamora_api.main import app
-from teamora_api.models import Membership, Project, ProjectUser, User
+from teamora_api.models import CallbackTask, Membership, Project, ProjectUser, User
 from teamora_api.security import hash_password
 
 Register = Callable[[AsyncClient, str], Awaitable[tuple[dict[str, object], str]]]
@@ -96,7 +96,7 @@ async def test_complete_operator_call_and_callback_flow(
 async def test_due_callback_is_prioritized_before_new_customer(
     client: AsyncClient, unique_suffix: str, register: Register
 ) -> None:
-    _auth, csrf = await register(client, unique_suffix)
+    auth, csrf = await register(client, unique_suffix)
     callback_customer = await create_customer(client, csrf, phone="+998911234567", name="Перезвон")
     await create_customer(client, csrf, phone="+998921234567", name="Новый клиент")
     response = await client.post(
@@ -109,6 +109,15 @@ async def test_due_callback_is_prioritized_before_new_customer(
         },
     )
     assert response.status_code == 201, response.text
+    async with SessionFactory.begin() as session:
+        await set_tenant_context(session, UUID(str(auth["tenant"]["id"])))  # type: ignore[index]
+        task = await session.scalar(
+            select(CallbackTask).where(
+                CallbackTask.id == UUID(response.json()["id"]),
+            )
+        )
+        assert task is not None
+        task.due_at = datetime.now(UTC) - timedelta(minutes=1)
 
     response = await client.post("/api/v1/dialer/next-client", headers={"X-CSRF-Token": csrf})
     assert response.status_code == 200, response.text

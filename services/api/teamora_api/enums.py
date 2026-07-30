@@ -55,6 +55,49 @@ class CallResultCategory(StrEnum):
     UNSUCCESSFUL = "unsuccessful"
 
 
+class TaskType(StrEnum):
+    CALLBACK = "callback"
+    FOLLOW_UP = "follow_up"
+    MANUAL = "manual"
+    SYSTEM = "system"
+
+
+class TaskStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class TaskPriority(StrEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class TaskSource(StrEnum):
+    MANUAL = "manual"
+    CALL_RESULT = "call_result"
+    SYSTEM = "system"
+    CALL_FLOW = "call_flow"
+    LEGACY_CALLBACK = "legacy_callback"
+
+
+class TaskEventType(StrEnum):
+    CREATED = "created"
+    ASSIGNED = "assigned"
+    REASSIGNED = "reassigned"
+    STARTED = "started"
+    RESCHEDULED = "rescheduled"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    RESTORED = "restored"
+    PRIORITY_CHANGED = "priority_changed"
+    COMMENT_ADDED = "comment_added"
+    UPDATED = "updated"
+
+
 class TranscriptSpeaker(StrEnum):
     CUSTOMER = "customer"
     AI = "ai"

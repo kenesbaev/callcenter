@@ -118,8 +118,7 @@ and callback defaults. Operators and analysts can read only the projects allowed
 their role and project assignment; unavailable management controls are not rendered.
 
 Projects are archived instead of deleted. New projects receive an empty result catalog
-as an explicit extension point; configurable result definitions remain reserved for
-their later implementation stage.
+which owners and managers can populate with project-specific result definitions.
 Run `py -3.12 scripts/run_project_migration_test.py` to verify that a project created at
 the previous Alembic head survives the Stage 2 migration with its existing values and
 receives its result catalog. The script only accepts local PostgreSQL and always removes
@@ -180,8 +179,25 @@ immutable outcome snapshot (definition ID, code, localized label, translations,
 category and color). Later definition renames or category changes therefore do not
 rewrite history or analytics. The deprecated fixed `result` code remains temporarily
 accepted for older clients. `Idempotency-Key` prevents duplicate outcome events, notes
-and callback tasks. Run `py -3.12 scripts/run_call_result_migration_test.py` to verify
+and generated tasks. Run `py -3.12 scripts/run_call_result_migration_test.py` to verify
 known and unknown legacy results across upgrade and downgrade in an isolated database.
+
+## Tasks and callbacks
+
+`/app/tasks` is the unified tenant- and project-scoped workspace for callbacks,
+follow-ups, manual work and system tasks. Tasks have UTC due times, computed overdue
+state in the project timezone, priorities, assignment, an explicit state machine and
+an immutable `task_events` history. Owners and managers see and manage their project
+queues; operators see their assigned tasks and eligible unassigned work; analysts have
+read-only access. The compatibility route `/app/callbacks` and `/api/v1/callbacks`
+continue to use the same `callback_tasks` records.
+
+Mutating task APIs accept `Idempotency-Key`. Dialer locks due callback tasks and their
+customers with `FOR UPDATE SKIP LOCKED`, prioritizes overdue assigned work, and never
+issues a future callback before `due_at`. Result-driven callback and follow-up creation,
+replacement and do-not-call cancellation are synchronized without deleting completed
+history. Run `py -3.12 scripts/run_task_migration_test.py` to verify preservation of a
+legacy callback and its call/outcome links through Stage 6 upgrade and downgrade.
 
 ## Language readiness
 

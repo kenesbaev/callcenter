@@ -12,6 +12,7 @@ from teamora_api.enums import (
     CallResultCategory,
     CallStatus,
     LanguageCode,
+    TaskPriority,
     TranscriptSpeaker,
 )
 
@@ -77,6 +78,20 @@ class CallStartRequest(BaseModel):
     from_number: str = Field(default="MOCK", min_length=2, max_length=32)
 
 
+class CallResultTaskRequest(BaseModel):
+    title: str = Field(min_length=2, max_length=240)
+    description: str = Field(default="", max_length=8000)
+    priority: TaskPriority = TaskPriority.NORMAL
+    due_at: datetime
+    assigned_user_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def require_aware_due_at(self) -> CallResultTaskRequest:
+        if self.due_at.tzinfo is None:
+            raise ValueError("Дата задачи должна содержать часовой пояс")
+        return self
+
+
 class CallResultRequest(BaseModel):
     result_definition_id: UUID | None = None
     result: (
@@ -95,6 +110,7 @@ class CallResultRequest(BaseModel):
     ) = Field(default=None, deprecated=True)
     comment: str = Field(default="", max_length=4000)
     callback_at: datetime | None = None
+    task: CallResultTaskRequest | None = None
 
     def legacy_result_code(self) -> str | None:
         value = self.__dict__.get("result")
@@ -119,6 +135,7 @@ class CallResultResponse(BaseModel):
     call: CallRead
     customer_status: str
     callback_task_id: UUID | None = None
+    task_ids: list[UUID] = Field(default_factory=list)
     outcome: CallOutcomeSnapshotRead
 
 

@@ -37,6 +37,11 @@ from teamora_api.enums import (
     OperatorVersionStatus,
     QueueStatus,
     RoleName,
+    TaskEventType,
+    TaskPriority,
+    TaskSource,
+    TaskStatus,
+    TaskType,
     TenantStatus,
     ToolExecutionStatus,
     TranscriptSpeaker,
@@ -1047,20 +1052,135 @@ class CallbackTask(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="fk_callback_tasks_tenant_project_projects",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_callback_tasks_tenant_creator_memberships",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_outcome_id"],
+            ["call_outcomes.tenant_id", "call_outcomes.id"],
+            name="fk_callback_tasks_tenant_call_outcome",
+            ondelete="SET NULL (call_outcome_id)",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_callback_tasks_tenant_id"),
+        CheckConstraint(
+            "task_type IN ('callback', 'follow_up', 'manual', 'system')",
+            name="task_type_valid",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'in_progress', 'completed', 'cancelled')",
+            name="status_valid",
+        ),
+        CheckConstraint(
+            "priority IN ('low', 'normal', 'high', 'urgent')",
+            name="priority_valid",
+        ),
+        CheckConstraint(
+            "source IN ('manual', 'call_result', 'system', 'call_flow', 'legacy_callback')",
+            name="source_valid",
+        ),
+        CheckConstraint(
+            "(status = 'completed') = (completed_at IS NOT NULL)",
+            name="completed_at_matches_status",
+        ),
+        CheckConstraint(
+            "(status = 'cancelled') = (cancelled_at IS NOT NULL)",
+            name="cancelled_at_matches_status",
+        ),
         Index("ix_callback_tasks_tenant_status_due", "tenant_id", "status", "due_at"),
         Index("ix_callback_tasks_project_status_due", "project_id", "status", "due_at"),
+        Index(
+            "ix_callback_tasks_project_type_status_due",
+            "tenant_id",
+            "project_id",
+            "task_type",
+            "status",
+            "due_at",
+        ),
+        Index(
+            "uq_callback_tasks_tenant_idempotency_key",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     project_id: Mapped[UUID] = mapped_column(index=True)
     customer_id: Mapped[UUID] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), index=True)
     call_id: Mapped[UUID | None] = mapped_column(ForeignKey("calls.id", ondelete="SET NULL"), index=True)
+    call_outcome_id: Mapped[UUID | None] = mapped_column(index=True)
+    task_type: Mapped[TaskType] = mapped_column(enum_type(TaskType), default=TaskType.CALLBACK)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    priority: Mapped[TaskPriority] = mapped_column(
+        enum_type(TaskPriority), default=TaskPriority.NORMAL, nullable=False, index=True
+    )
     assigned_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
+    created_by_user_id: Mapped[UUID] = mapped_column(index=True)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[TaskStatus] = mapped_column(
+        enum_type(TaskStatus, length=24), default=TaskStatus.PENDING, nullable=False, index=True
+    )
+    comment: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source: Mapped[TaskSource] = mapped_column(
+        enum_type(TaskSource), default=TaskSource.MANUAL, nullable=False, index=True
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    # Kept as a compatibility mirror for the legacy /callbacks contract and safe downgrade.
     note: Mapped[str] = mapped_column(Text, default="")
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancellation_reason: Mapped[str | None] = mapped_column(String(1000))
+
+
+class TaskEvent(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "task_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id"],
+            ["callback_tasks.tenant_id", "callback_tasks.id"],
+            name="fk_task_events_tenant_task",
+            ondelete="CASCADE",
+        ),
+        Index("ix_task_events_task_created", "task_id", "created_at"),
+    )
+
+    task_id: Mapped[UUID] = mapped_column(index=True)
+    event_type: Mapped[TaskEventType] = mapped_column(enum_type(TaskEventType), nullable=False)
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    safe_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(120), nullable=False)
+
+
+class TaskCommandSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "task_command_submissions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id"],
+            ["callback_tasks.tenant_id", "callback_tasks.id"],
+            name="fk_task_command_submissions_tenant_task",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_task_command_submissions_tenant_idempotency_key",
+        ),
+    )
+
+    task_id: Mapped[UUID] = mapped_column(index=True)
+    operation: Mapped[str] = mapped_column(String(40), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
 class HumanOperator(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

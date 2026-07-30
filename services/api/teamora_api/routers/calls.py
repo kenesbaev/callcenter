@@ -13,7 +13,15 @@ from teamora_api.call_flow_service import active_version_for_project
 from teamora_api.call_result_service import localized_result_name
 from teamora_api.config import get_settings
 from teamora_api.dependencies import Principal, SessionDep, require_permission
-from teamora_api.enums import CallChannel, CallStatus
+from teamora_api.enums import (
+    CallChannel,
+    CallStatus,
+    TaskEventType,
+    TaskPriority,
+    TaskSource,
+    TaskStatus,
+    TaskType,
+)
 from teamora_api.errors import ApiError
 from teamora_api.models import (
     Call,
@@ -43,6 +51,13 @@ from teamora_api.schemas.calls import (
     TranscriptSegmentRead,
 )
 from teamora_api.schemas.common import Page
+from teamora_api.task_service import (
+    append_task_event,
+    cancel_task_record,
+    create_task_record,
+    sync_customer_callback_state,
+    utc_due_at,
+)
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -263,7 +278,8 @@ async def start_call(
                 CallbackTask.project_id == customer.project_id,
                 CallbackTask.id == payload.callback_task_id,
                 CallbackTask.customer_id == customer.id,
-                CallbackTask.status.in_(["pending", "in_progress"]),
+                CallbackTask.task_type == TaskType.CALLBACK,
+                CallbackTask.status.in_([TaskStatus.PENDING, TaskStatus.IN_PROGRESS]),
                 CallbackTask.assigned_user_id == principal.user_id,
             )
         )
@@ -301,7 +317,9 @@ async def start_call(
     if callback:
         callback.call_id = call.id
         callback.assigned_user_id = principal.user_id
-        callback.status = "in_progress"
+        callback.status = TaskStatus.IN_PROGRESS
+        if callback.started_at is None:
+            callback.started_at = now
     customer.last_call_at = now
     customer.locked_until = now + timedelta(minutes=15)
     await append_call_event(
@@ -411,6 +429,7 @@ def result_fingerprint(payload: CallResultRequest, result_definition_id: UUID) -
             "result_definition_id": str(result_definition_id),
             "comment": payload.comment.strip(),
             "callback_at": payload.callback_at.isoformat() if payload.callback_at else None,
+            "task": payload.task.model_dump(mode="json") if payload.task else None,
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -589,32 +608,48 @@ async def save_call_result(
             )
         )
 
+    await session.flush()
     prior_tasks = list(
         await session.scalars(
             select(CallbackTask).where(
                 CallbackTask.tenant_id == principal.tenant_id,
                 CallbackTask.call_id == call.id,
-                CallbackTask.status == "in_progress",
+                CallbackTask.task_type == TaskType.CALLBACK,
+                CallbackTask.status == TaskStatus.IN_PROGRESS,
             )
         )
     )
     for task in prior_tasks:
-        task.status = "completed"
+        task.status = TaskStatus.COMPLETED
         task.completed_at = now
+        task.cancelled_at = None
+        await append_task_event(
+            session,
+            task=task,
+            event_type=TaskEventType.COMPLETED,
+            actor_user_id=principal.user_id,
+            correlation_id=request.state.correlation_id,
+            safe_snapshot={"completed_by_call_result": str(outcome.id)},
+        )
 
     pending_callbacks = list(
         await session.scalars(
             select(CallbackTask)
             .where(
                 CallbackTask.tenant_id == principal.tenant_id,
-                CallbackTask.call_id == call.id,
-                CallbackTask.status == "pending",
+                CallbackTask.customer_id == customer.id,
+                CallbackTask.task_type == TaskType.CALLBACK,
+                CallbackTask.status == TaskStatus.PENDING,
+                or_(
+                    CallbackTask.call_outcome_id == outcome.id,
+                    CallbackTask.call_id == call.id,
+                ),
             )
             .order_by(CallbackTask.created_at)
         )
     )
     new_callback: CallbackTask | None = None
-    if definition.requires_callback:
+    if definition.requires_callback and not definition.do_not_call:
         due_at = payload.callback_at
         if due_at is None:
             configured_delay = project.callback_rules.get("default_delay_minutes", 60)
@@ -625,28 +660,54 @@ async def save_call_result(
             new_callback = pending_callbacks[0]
             new_callback.due_at = due_at
             new_callback.assigned_user_id = principal.user_id
+            new_callback.comment = comment
             new_callback.note = comment
+            new_callback.call_id = call.id
+            new_callback.call_outcome_id = outcome.id
+            await append_task_event(
+                session,
+                task=new_callback,
+                event_type=TaskEventType.RESCHEDULED,
+                actor_user_id=principal.user_id,
+                correlation_id=request.state.correlation_id,
+                safe_snapshot={"due_at": due_at.isoformat(), "call_outcome_id": str(outcome.id)},
+            )
             for duplicate_callback in pending_callbacks[1:]:
-                duplicate_callback.status = "cancelled"
-                duplicate_callback.completed_at = now
+                await cancel_task_record(
+                    session,
+                    task=duplicate_callback,
+                    actor_user_id=principal.user_id,
+                    reason="Дубликат callback для результата звонка",
+                    correlation_id=request.state.correlation_id,
+                )
         else:
-            new_callback = CallbackTask(
+            new_callback = await create_task_record(
+                session,
                 tenant_id=principal.tenant_id,
                 project_id=customer.project_id,
                 customer_id=customer.id,
+                created_by_user_id=principal.user_id,
+                task_type=TaskType.CALLBACK,
+                title=f"Перезвон: {outcome.label}",
+                description=comment,
+                priority=TaskPriority.NORMAL,
                 call_id=call.id,
+                call_outcome_id=outcome.id,
                 assigned_user_id=principal.user_id,
                 due_at=due_at,
-                status="pending",
-                note=comment,
+                source=TaskSource.CALL_RESULT,
+                correlation_id=request.state.correlation_id,
+                comment=comment,
             )
-            session.add(new_callback)
-        customer.status = "callback"
-        customer.next_call_at = new_callback.due_at
     else:
         for pending_callback in pending_callbacks:
-            pending_callback.status = "cancelled"
-            pending_callback.completed_at = now
+            await cancel_task_record(
+                session,
+                task=pending_callback,
+                actor_user_id=principal.user_id,
+                reason="Результат звонка больше не требует перезвона",
+                correlation_id=request.state.correlation_id,
+            )
         if definition.do_not_call:
             customer.status = "do_not_call"
         elif definition.return_to_queue:
@@ -655,7 +716,111 @@ async def save_call_result(
             customer.status = definition.next_customer_status
         elif definition.completes_customer:
             customer.status = "completed"
-        customer.next_call_at = None
+    result_tasks = list(
+        await session.scalars(
+            select(CallbackTask)
+            .where(
+                CallbackTask.tenant_id == principal.tenant_id,
+                CallbackTask.customer_id == customer.id,
+                CallbackTask.call_outcome_id == outcome.id,
+                CallbackTask.task_type != TaskType.CALLBACK,
+                CallbackTask.source == TaskSource.CALL_RESULT,
+                CallbackTask.status == TaskStatus.PENDING,
+            )
+            .order_by(CallbackTask.created_at)
+        )
+    )
+    new_general_task: CallbackTask | None = None
+    if definition.creates_task or payload.task is not None:
+        task_payload = payload.task
+        default_delay = project.callback_rules.get("default_delay_minutes", 60)
+        delay = default_delay if isinstance(default_delay, int) else 60
+        task_due_at = task_payload.due_at if task_payload else now + timedelta(minutes=delay)
+        task_title = task_payload.title if task_payload else f"Задача: {outcome.label}"
+        task_description = task_payload.description if task_payload else comment
+        task_priority = task_payload.priority if task_payload else TaskPriority.NORMAL
+        task_assignee = task_payload.assigned_user_id if task_payload else principal.user_id
+        if task_assignee not in (None, principal.user_id):
+            raise ApiError(403, "task_reassign_forbidden", "Оператор может назначить задачу только себе")
+        if result_tasks:
+            new_general_task = result_tasks[0]
+            new_general_task.title = task_title.strip()
+            new_general_task.description = task_description.strip()
+            new_general_task.priority = task_priority
+            new_general_task.due_at = utc_due_at(task_due_at, allow_now=task_payload is None)
+            new_general_task.assigned_user_id = task_assignee
+            new_general_task.comment = comment
+            new_general_task.note = comment
+            await append_task_event(
+                session,
+                task=new_general_task,
+                event_type=TaskEventType.UPDATED,
+                actor_user_id=principal.user_id,
+                correlation_id=request.state.correlation_id,
+                safe_snapshot={"updated_by_call_result": str(outcome.id)},
+            )
+            for duplicate_task in result_tasks[1:]:
+                await cancel_task_record(
+                    session,
+                    task=duplicate_task,
+                    actor_user_id=principal.user_id,
+                    reason="Дубликат задачи результата звонка",
+                    correlation_id=request.state.correlation_id,
+                )
+        else:
+            new_general_task = await create_task_record(
+                session,
+                tenant_id=principal.tenant_id,
+                project_id=customer.project_id,
+                customer_id=customer.id,
+                created_by_user_id=principal.user_id,
+                task_type=TaskType.FOLLOW_UP,
+                title=task_title,
+                description=task_description,
+                priority=task_priority,
+                due_at=task_due_at,
+                assigned_user_id=task_assignee,
+                source=TaskSource.CALL_RESULT,
+                correlation_id=request.state.correlation_id,
+                comment=comment,
+                call_id=call.id,
+                call_outcome_id=outcome.id,
+                allow_due_now=task_payload is None,
+            )
+    else:
+        for result_task in result_tasks:
+            await cancel_task_record(
+                session,
+                task=result_task,
+                actor_user_id=principal.user_id,
+                reason="Результат звонка больше не требует общей задачи",
+                correlation_id=request.state.correlation_id,
+            )
+
+    if definition.do_not_call:
+        future_callbacks = list(
+            await session.scalars(
+                select(CallbackTask).where(
+                    CallbackTask.tenant_id == principal.tenant_id,
+                    CallbackTask.customer_id == customer.id,
+                    CallbackTask.task_type == TaskType.CALLBACK,
+                    CallbackTask.status == TaskStatus.PENDING,
+                    CallbackTask.due_at > now,
+                )
+            )
+        )
+        for future_callback in future_callbacks:
+            await cancel_task_record(
+                session,
+                task=future_callback,
+                actor_user_id=principal.user_id,
+                reason="Клиент отмечен как do-not-call",
+                correlation_id=request.state.correlation_id,
+            )
+        customer.status = "do_not_call"
+    await sync_customer_callback_state(session, tenant_id=principal.tenant_id, customer=customer)
+    if definition.do_not_call:
+        customer.status = "do_not_call"
     customer.locked_by_user_id = None
     customer.locked_until = None
     customer.lock_token = None
@@ -670,6 +835,7 @@ async def save_call_result(
             "result": definition.system_code,
             "category": definition.category.value,
             "callback": new_callback is not None,
+            "task": new_general_task is not None,
         },
     )
     await write_audit(
@@ -691,6 +857,7 @@ async def save_call_result(
         call=serialize_call(call),
         customer_status=customer.status,
         callback_task_id=new_callback.id if new_callback else None,
+        task_ids=[task.id for task in (new_callback, new_general_task) if task is not None],
         outcome=outcome_snapshot(outcome),
     )
     if idempotency_key is not None:

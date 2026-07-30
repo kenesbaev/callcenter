@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import shutil
@@ -40,6 +41,11 @@ def node_executable() -> str:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Run Playwright against an isolated local PostgreSQL database."
+    )
+    parser.add_argument("playwright_args", nargs=argparse.REMAINDER)
+    arguments = parser.parse_args()
     settings = settings_from_repository()
     if settings.app_env in {"staging", "production"}:
         raise RuntimeError(
@@ -97,6 +103,7 @@ def main() -> int:
                     REPOSITORY_ROOT / "node_modules" / "@playwright" / "test" / "cli.js"
                 ),
                 "test",
+                *arguments.playwright_args,
             ],
             cwd=REPOSITORY_ROOT,
             env=environment,

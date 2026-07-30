@@ -10,6 +10,7 @@ import {
   PhoneCall,
   PhoneOff,
   RotateCcw,
+  ListTodo,
   UserRound,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -33,6 +34,10 @@ const resultSchema = z.object({
   result_definition_id: z.string().min(1, "Выберите результат"),
   comment: z.string().max(4000),
   callback_at: z.string(),
+  create_task: z.boolean(),
+  task_title: z.string().max(240),
+  task_due_at: z.string(),
+  task_priority: z.enum(["low", "normal", "high", "urgent"]),
 });
 
 type ResultForm = z.infer<typeof resultSchema>;
@@ -154,12 +159,17 @@ export function DialerView() {
       result_definition_id: "",
       comment: "",
       callback_at: "",
+      create_task: false,
+      task_title: "",
+      task_due_at: "",
+      task_priority: "normal",
     },
   });
   const selectedResultId = resultForm.watch("result_definition_id");
   const selectedResult = callResults.data?.definitions.find(
     (definition) => definition.id === selectedResultId,
   );
+  const createTask = resultForm.watch("create_task");
   const groupedResults = useMemo(
     () => groupCallResults(callResults.data?.definitions ?? []),
     [callResults.data],
@@ -177,6 +187,21 @@ export function DialerView() {
       resultForm.setValue("result_definition_id", defaultResult.id);
     }
   }, [callResults.data, resultForm, selectedResultId]);
+
+  useEffect(() => {
+    if (!selectedResult?.creates_task) return;
+    resultForm.setValue("create_task", true);
+    if (!resultForm.getValues("task_title")) {
+      resultForm.setValue(
+        "task_title",
+        `Задача: ${localizedResult(selectedResult, assignment.data?.customer.preferred_language)}`,
+      );
+    }
+  }, [
+    assignment.data?.customer.preferred_language,
+    resultForm,
+    selectedResult,
+  ]);
 
   const nextClient = useMutation({
     mutationFn: () =>
@@ -235,6 +260,25 @@ export function DialerView() {
             selectedResult?.requires_callback && value.callback_at
               ? new Date(value.callback_at).toISOString()
               : null,
+          task:
+            (selectedResult?.creates_task || value.create_task) &&
+            value.task_due_at
+              ? {
+                  title:
+                    value.task_title.trim() ||
+                    `Задача: ${
+                      selectedResult
+                        ? localizedResult(
+                            selectedResult,
+                            assignment.data?.customer.preferred_language,
+                          )
+                        : "последующий контакт"
+                    }`,
+                  description: value.comment,
+                  priority: value.task_priority,
+                  due_at: new Date(value.task_due_at).toISOString(),
+                }
+              : null,
         }),
       }),
     onSuccess: async () => {
@@ -245,6 +289,7 @@ export function DialerView() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["calls"] }),
         queryClient.invalidateQueries({ queryKey: ["callbacks"] }),
+        queryClient.invalidateQueries({ queryKey: ["tasks"] }),
         queryClient.invalidateQueries({ queryKey: ["customers"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
       ]);
@@ -265,6 +310,16 @@ export function DialerView() {
       resultForm.setError("callback_at", {
         type: "required",
         message: "Укажите дату и время перезвона",
+      });
+      valid = false;
+    }
+    if (
+      (selectedResult?.creates_task || value.create_task) &&
+      !value.task_due_at
+    ) {
+      resultForm.setError("task_due_at", {
+        type: "required",
+        message: "Укажите срок задачи",
       });
       valid = false;
     }
@@ -428,6 +483,22 @@ export function DialerView() {
                   {assignment.data.source === "callback" ? "Перезвон" : "Новый"}
                 </StatusBadge>
               </div>
+              {assignment.data.task && (
+                <div className="dialer-task-source">
+                  <CalendarClock size={17} />
+                  <div>
+                    <strong>{assignment.data.task.title}</strong>
+                    <span>
+                      {new Date(assignment.data.task.due_at).toLocaleString(
+                        "ru-RU",
+                      )}
+                      {assignment.data.task.comment
+                        ? ` · ${assignment.data.task.comment}`
+                        : ""}
+                    </span>
+                  </div>
+                </div>
+              )}
               <div className="customer-facts">
                 <div>
                   <span>Язык</span>
@@ -593,6 +664,59 @@ export function DialerView() {
                       )}
                     </div>
                   )}
+                  <label className="dialer-create-task">
+                    <input
+                      disabled={selectedResult?.creates_task}
+                      type="checkbox"
+                      {...resultForm.register("create_task")}
+                    />
+                    <span>
+                      <strong>Создать общую задачу</strong>
+                      <small>
+                        {selectedResult?.creates_task
+                          ? "Обязательно для выбранного результата"
+                          : "Последующий контакт или ручное действие"}
+                      </small>
+                    </span>
+                  </label>
+                  {(createTask || selectedResult?.creates_task) && (
+                    <div className="dialer-task-fields">
+                      <div className="field">
+                        <label htmlFor="task-title">Название задачи</label>
+                        <input
+                          id="task-title"
+                          placeholder="Что необходимо сделать"
+                          {...resultForm.register("task_title")}
+                        />
+                      </div>
+                      <div className="field">
+                        <label htmlFor="task-due-at">Срок задачи</label>
+                        <input
+                          id="task-due-at"
+                          min={new Date().toISOString().slice(0, 16)}
+                          type="datetime-local"
+                          {...resultForm.register("task_due_at")}
+                        />
+                        {resultForm.formState.errors.task_due_at && (
+                          <small className="field-error">
+                            {resultForm.formState.errors.task_due_at.message}
+                          </small>
+                        )}
+                      </div>
+                      <div className="field">
+                        <label htmlFor="task-priority">Приоритет</label>
+                        <select
+                          id="task-priority"
+                          {...resultForm.register("task_priority")}
+                        >
+                          <option value="low">Низкий</option>
+                          <option value="normal">Обычный</option>
+                          <option value="high">Высокий</option>
+                          <option value="urgent">Срочный</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
                   <div className="field">
                     <label htmlFor="call-comment">
                       Комментарий
@@ -664,6 +788,32 @@ export function DialerView() {
               <p>Создаётся автоматически при выборе результата «Перезвон».</p>
             </div>
           </section>
+          {assignment.data &&
+            (assignment.data.pending_tasks ?? []).length > 0 && (
+              <section className="panel dialer-pending-tasks">
+                <div className="row-between">
+                  <h2>Задачи клиента</h2>
+                  <ListTodo size={18} />
+                </div>
+                {(assignment.data.pending_tasks ?? []).map((task) => (
+                  <div className="dialer-pending-task" key={task.id}>
+                    <div>
+                      <strong>{task.title}</strong>
+                      <span>
+                        {new Date(task.due_at).toLocaleString("ru-RU")}
+                      </span>
+                    </div>
+                    <StatusBadge
+                      tone={
+                        task.task_type === "callback" ? "warning" : "primary"
+                      }
+                    >
+                      {task.task_type === "callback" ? "Перезвон" : "Задача"}
+                    </StatusBadge>
+                  </div>
+                ))}
+              </section>
+            )}
         </aside>
       </div>
     </>

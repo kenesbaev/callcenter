@@ -32,6 +32,7 @@ test:
 	py -3.12 scripts/run_customer_migration_test.py
 	py -3.12 scripts/run_call_flow_migration_test.py
 	py -3.12 scripts/run_call_result_migration_test.py
+	py -3.12 scripts/run_task_migration_test.py
 	cd services/worker && py -3.12 -m pytest
 	py -3.12 scripts/run_e2e_tests.py
 

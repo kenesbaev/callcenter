@@ -298,7 +298,88 @@ export type DialerAssignment = {
   customer: Customer;
   source: "callback" | "new";
   callback_task_id: string | null;
+  task: DialerTaskSummary | null;
+  pending_tasks: DialerTaskSummary[];
   lock_token: string;
+};
+
+export type TaskType = "callback" | "follow_up" | "manual" | "system";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "cancelled";
+export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskSource =
+  "manual" | "call_result" | "system" | "call_flow" | "legacy_callback";
+
+export type DialerTaskSummary = {
+  id: string;
+  task_type: TaskType;
+  title: string;
+  priority: TaskPriority;
+  status: TaskStatus;
+  due_at: string;
+  comment: string;
+  assigned_user_id: string | null;
+};
+
+export type Task = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  project_name: string;
+  project_timezone: string;
+  task_type: TaskType;
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  status: TaskStatus;
+  customer_id: string;
+  customer_name: string | null;
+  customer_phone: string | null;
+  call_id: string | null;
+  call_outcome_id: string | null;
+  assigned_user_id: string | null;
+  assigned_user_name: string | null;
+  created_by_user_id: string;
+  created_by_user_name: string;
+  due_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string | null;
+  comment: string;
+  source: TaskSource;
+  is_overdue: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskEvent = {
+  id: string;
+  task_id: string;
+  event_type:
+    | "created"
+    | "assigned"
+    | "reassigned"
+    | "started"
+    | "rescheduled"
+    | "completed"
+    | "cancelled"
+    | "restored"
+    | "priority_changed"
+    | "comment_added"
+    | "updated";
+  actor_user_id: string | null;
+  actor_name: string | null;
+  safe_snapshot: Record<string, unknown>;
+  created_at: string;
+};
+
+export type TaskOptions = {
+  operators: Array<{ user_id: string; display_name: string }>;
+  customers: Array<{
+    id: string;
+    display_name: string | null;
+    phone: string | null;
+  }>;
 };
 
 export type Project = {
@@ -402,6 +483,7 @@ export type CallResultResponse = {
   call: Call;
   customer_status: string;
   callback_task_id: string | null;
+  task_ids: string[];
   outcome: {
     result_definition_id: string;
     code: string;

@@ -401,10 +401,23 @@ class CallbackRead(BaseModel):
     created_at: datetime
 
 
+class DialerTaskSummary(BaseModel):
+    id: UUID
+    task_type: str
+    title: str
+    priority: str
+    status: str
+    due_at: datetime
+    comment: str
+    assigned_user_id: UUID | None
+
+
 class DialerAssignment(BaseModel):
     customer: CustomerRead
     source: Literal["callback", "new"]
     callback_task_id: UUID | None = None
+    task: DialerTaskSummary | None = None
+    pending_tasks: list[DialerTaskSummary] = Field(default_factory=list)
     lock_token: UUID
 
 

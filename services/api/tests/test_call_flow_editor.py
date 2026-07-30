@@ -5,12 +5,12 @@ from copy import deepcopy
 from uuid import UUID, uuid4
 
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from teamora_api.db import SessionFactory, set_tenant_context
 from teamora_api.enums import RoleName
 from teamora_api.main import app
-from teamora_api.models import CallFlow, CallFlowVersion, Customer
+from teamora_api.models import CallbackTask, CallFlow, CallFlowVersion, Customer
 from tests.test_customer_profiles import create_customer, create_project, default_project_id
 from tests.test_project_configuration import authenticated_client, create_member
 
@@ -568,6 +568,13 @@ async def test_preview_does_not_modify_customer(
         stored = await session.scalar(select(Customer).where(Customer.id == UUID(str(customer["id"]))))
         assert stored is not None
         assert stored.custom_fields == {}
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(CallbackTask)
+                .where(CallbackTask.customer_id == UUID(str(customer["id"])))
+            )
+        ) == 0
 
 
 async def test_preview_switches_language(client: AsyncClient, unique_suffix: str, register: Register) -> None:
