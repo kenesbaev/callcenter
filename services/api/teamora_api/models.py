@@ -28,6 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from teamora_api.db import Base, TenantOwnedMixin, TimestampMixin, UUIDPrimaryKeyMixin
 from teamora_api.enums import (
     CallChannel,
+    CallResultCategory,
     CallStatus,
     DeliveryStatus,
     IntegrationStatus,
@@ -265,6 +266,79 @@ class CallResultCatalog(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     project_id: Mapped[UUID] = mapped_column(index=True)
     name: Mapped[str] = mapped_column(String(160), default="Результаты звонка", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class CallResultDefinition(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "call_result_definitions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "catalog_id"],
+            [
+                "call_result_catalogs.tenant_id",
+                "call_result_catalogs.project_id",
+                "call_result_catalogs.id",
+            ],
+            name="fk_call_result_definitions_tenant_project_catalog",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_call_result_definitions_tenant_project_projects",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "system_code",
+            name="uq_call_result_definitions_tenant_project_code",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "id",
+            name="uq_call_result_definitions_tenant_project_id",
+        ),
+        CheckConstraint(
+            "category IN ('successful', 'intermediate', 'unreachable', 'unsuccessful')",
+            name="category_valid",
+        ),
+        CheckConstraint("system_code ~ '^[a-z][a-z0-9_]{1,79}$'", name="system_code_valid"),
+        CheckConstraint("color ~ '^#[0-9A-Fa-f]{6}$'", name="color_valid"),
+        CheckConstraint("sort_order >= 0", name="sort_order_non_negative"),
+        CheckConstraint(
+            "NOT requires_callback_at OR requires_callback",
+            name="callback_date_requires_callback",
+        ),
+        Index(
+            "ix_call_result_definitions_project_active_order",
+            "tenant_id",
+            "project_id",
+            "is_active",
+            "sort_order",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    catalog_id: Mapped[UUID] = mapped_column(index=True)
+    system_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    category: Mapped[CallResultCategory] = mapped_column(enum_type(CallResultCategory), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    name_translations: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
+    color: Mapped[str] = mapped_column(String(7), default="#64748B", nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    requires_comment: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    requires_callback: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    requires_callback_at: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    creates_task: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    next_customer_status: Mapped[str | None] = mapped_column(String(32))
+    return_to_queue: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    completes_customer: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    do_not_call: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    counts_as_success: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class RefreshToken(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -902,12 +976,66 @@ class CallTag(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class CallOutcome(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "call_outcomes"
-    __table_args__ = (UniqueConstraint("call_id"),)
+    __table_args__ = (
+        UniqueConstraint("call_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "result_definition_id"],
+            [
+                "call_result_definitions.tenant_id",
+                "call_result_definitions.project_id",
+                "call_result_definitions.id",
+            ],
+            name="fk_call_outcomes_tenant_project_result_definition",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "uq_call_outcomes_tenant_idempotency_key",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index("ix_call_outcomes_project_category", "project_id", "category"),
+        UniqueConstraint("tenant_id", "id", name="uq_call_outcomes_tenant_id"),
+        CheckConstraint(
+            "category IN ('successful', 'intermediate', 'unreachable', 'unsuccessful')",
+            name="category_valid",
+        ),
+    )
 
     call_id: Mapped[UUID] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"))
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    result_definition_id: Mapped[UUID] = mapped_column(index=True)
     code: Mapped[str] = mapped_column(String(80), nullable=False)
     label: Mapped[str] = mapped_column(String(160), nullable=False)
+    category: Mapped[CallResultCategory] = mapped_column(enum_type(CallResultCategory), nullable=False)
+    color: Mapped[str] = mapped_column(String(7), nullable=False)
+    label_translations: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
     details: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+
+
+class CallResultSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "call_result_submissions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "outcome_id"],
+            ["call_outcomes.tenant_id", "call_outcomes.id"],
+            name="fk_call_result_submissions_tenant_outcome",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_call_result_submissions_tenant_idempotency_key",
+        ),
+    )
+
+    outcome_id: Mapped[UUID] = mapped_column(index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
 class CallbackTask(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

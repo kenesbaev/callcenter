@@ -5,9 +5,15 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from teamora_api.enums import CallChannel, CallStatus, LanguageCode, TranscriptSpeaker
+from teamora_api.enums import (
+    CallChannel,
+    CallResultCategory,
+    CallStatus,
+    LanguageCode,
+    TranscriptSpeaker,
+)
 
 
 class SimulatorCallCreate(BaseModel):
@@ -72,25 +78,48 @@ class CallStartRequest(BaseModel):
 
 
 class CallResultRequest(BaseModel):
-    result: Literal[
-        "success",
-        "no_answer",
-        "busy",
-        "callback",
-        "wrong_number",
-        "do_not_call",
-        "not_interested",
-        "failed",
-        "other",
-    ]
+    result_definition_id: UUID | None = None
+    result: (
+        Literal[
+            "success",
+            "no_answer",
+            "busy",
+            "callback",
+            "wrong_number",
+            "do_not_call",
+            "not_interested",
+            "failed",
+            "other",
+        ]
+        | None
+    ) = Field(default=None, deprecated=True)
     comment: str = Field(default="", max_length=4000)
     callback_at: datetime | None = None
+
+    def legacy_result_code(self) -> str | None:
+        value = self.__dict__.get("result")
+        return value if isinstance(value, str) else None
+
+    @model_validator(mode="after")
+    def require_one_result_reference(self) -> CallResultRequest:
+        if (self.result_definition_id is None) == (self.legacy_result_code() is None):
+            raise ValueError("Передайте result_definition_id или legacy result")
+        return self
+
+
+class CallOutcomeSnapshotRead(BaseModel):
+    result_definition_id: UUID
+    code: str
+    label: str
+    category: CallResultCategory
+    color: str
 
 
 class CallResultResponse(BaseModel):
     call: CallRead
     customer_status: str
     callback_task_id: UUID | None = None
+    outcome: CallOutcomeSnapshotRead
 
 
 class SimulatorMessageResponse(BaseModel):

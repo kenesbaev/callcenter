@@ -232,19 +232,19 @@ The OpenAI adapter follows the released Realtime WebSocket path and keeps busine
 
 All tenant-owned models carry the tenant columns, even when the tenant can be inferred through a relation.
 
-| Group            | Models                                                                                                |
-| ---------------- | ----------------------------------------------------------------------------------------------------- |
-| Identity         | Tenant, TenantSettings, User, Membership, Role, Permission, RefreshToken, Invitation                  |
-| Telephony        | PhoneNumber, SipTrunk, SipCredentialReference, InboundRoute, OutboundRoute                            |
-| AI configuration | AiOperator, AiOperatorVersion, VoiceProfile, LanguageConfiguration, CallFlow, CallFlowVersion         |
-| Knowledge        | KnowledgeSource, KnowledgeDocument, KnowledgeChunk, KnowledgeSyncJob                                  |
-| CRM              | Customer, CustomerContact, CustomerNote                                                               |
-| Conversation     | Call, CallParticipant, CallEvent, TranscriptSegment, CallSummary, CallRecording, CallTag, CallOutcome |
-| Human operations | HumanOperator, OperatorStatus, OperatorQueue, QueueMember, TransferRequest                            |
-| Integrations     | Integration, IntegrationCredentialReference, CrmFieldMapping, WebhookEndpoint, WebhookDelivery        |
-| Tools            | ToolDefinition, ToolPermission, ToolExecution                                                         |
-| Billing          | UsageRecord, UsageLimit, Plan, Subscription, Invoice, Payment                                         |
-| Operations       | Notification, AuditLog, SystemIncident, FeatureFlag                                                   |
+| Group            | Models                                                                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identity         | Tenant, TenantSettings, User, Membership, Role, Permission, RefreshToken, Invitation                                                           |
+| Telephony        | PhoneNumber, SipTrunk, SipCredentialReference, InboundRoute, OutboundRoute                                                                     |
+| AI configuration | AiOperator, AiOperatorVersion, VoiceProfile, LanguageConfiguration, CallFlow, CallFlowVersion                                                  |
+| Knowledge        | KnowledgeSource, KnowledgeDocument, KnowledgeChunk, KnowledgeSyncJob                                                                           |
+| CRM              | Customer, CustomerContact, CustomerNote                                                                                                        |
+| Conversation     | Call, CallParticipant, CallEvent, TranscriptSegment, CallSummary, CallRecording, CallTag, CallOutcome, CallResultCatalog, CallResultDefinition |
+| Human operations | HumanOperator, OperatorStatus, OperatorQueue, QueueMember, TransferRequest                                                                     |
+| Integrations     | Integration, IntegrationCredentialReference, CrmFieldMapping, WebhookEndpoint, WebhookDelivery                                                 |
+| Tools            | ToolDefinition, ToolPermission, ToolExecution                                                                                                  |
+| Billing          | UsageRecord, UsageLimit, Plan, Subscription, Invoice, Payment                                                                                  |
+| Operations       | Notification, AuditLog, SystemIncident, FeatureFlag                                                                                            |
 
 Secret reference models contain a provider/key identifier and encrypted metadata only. The local secret store uses authenticated encryption with a key supplied outside PostgreSQL; production uses a Vault/KMS adapter.
 

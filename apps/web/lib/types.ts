@@ -402,6 +402,51 @@ export type CallResultResponse = {
   call: Call;
   customer_status: string;
   callback_task_id: string | null;
+  outcome: {
+    result_definition_id: string;
+    code: string;
+    label: string;
+    category: CallResultCategory;
+    color: string;
+  };
+};
+
+export type CallResultCategory =
+  "successful" | "intermediate" | "unreachable" | "unsuccessful";
+
+export type CallResultDefinition = {
+  id: string;
+  project_id: string;
+  catalog_id: string;
+  system_code: string;
+  category: CallResultCategory;
+  name: string;
+  name_translations: Record<string, string>;
+  description: string;
+  color: string;
+  sort_order: number;
+  is_active: boolean;
+  requires_comment: boolean;
+  requires_callback: boolean;
+  requires_callback_at: boolean;
+  creates_task: boolean;
+  next_customer_status: string | null;
+  return_to_queue: boolean;
+  completes_customer: boolean;
+  do_not_call: boolean;
+  counts_as_success: boolean;
+  archived_at: string | null;
+  used_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CallResultCatalog = {
+  id: string;
+  project_id: string;
+  name: string;
+  is_active: boolean;
+  definitions: CallResultDefinition[];
 };
 
 export type CallDetail = Call & {

@@ -167,6 +167,22 @@ Run `py -3.12 scripts/run_call_flow_migration_test.py` to verify preservation an
 project backfill of pre-Stage-4 flows, versions, project links and call history. The
 script only accepts local PostgreSQL and removes its isolated database after completion.
 
+## Project call results
+
+`/app/projects/{project_id}/results` manages a tenant- and project-scoped result catalog.
+Owners and managers can create, translate, order, deactivate, archive and restore result
+definitions; assigned operators receive only active definitions in Dialer. Definitions
+use the system categories `successful`, `intermediate`, `unreachable` and
+`unsuccessful`, while their codes, labels, colors and workflow rules remain configurable.
+
+Saving `POST /api/v1/calls/{call_id}/result` with `result_definition_id` records an
+immutable outcome snapshot (definition ID, code, localized label, translations,
+category and color). Later definition renames or category changes therefore do not
+rewrite history or analytics. The deprecated fixed `result` code remains temporarily
+accepted for older clients. `Idempotency-Key` prevents duplicate outcome events, notes
+and callback tasks. Run `py -3.12 scripts/run_call_result_migration_test.py` to verify
+known and unknown legacy results across upgrade and downgrade in an isolated database.
+
 ## Language readiness
 
 | Language           | Status            | Rule                                                                       |

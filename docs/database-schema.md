@@ -75,3 +75,20 @@ The active version foreign key includes `(tenant_id, project_id, call_flow_id, i
 a flow cannot select a version from another flow. `calls.call_flow_version_id` uses the
 same tenant/project boundary and preserves the exact published snapshot used when the
 call started. Existing calls are migrated with a null snapshot and remain readable.
+
+## Project result catalog and historical outcomes
+
+Stage 5 extends `call_result_catalogs` with project-owned `call_result_definitions`.
+Composite foreign keys bind each definition to its tenant, project and catalog; its
+system code is unique within `(tenant_id, project_id)`. Definitions may be disabled or
+archived but are not deleted from historical calls.
+
+`call_outcomes` now references a definition through the same tenant/project boundary and
+stores an immutable snapshot of the code, label, translations, category and color.
+Analytics groups by the snapshot category, so editing a current definition never changes
+past reports. `call_result_submissions` is an immutable tenant-scoped command journal;
+its unique `(tenant_id, idempotency_key)` protects result side effects even after a call's
+outcome is later changed. Migration `g69e4d0b8f52` creates default definitions for every
+existing project and converts unknown old codes to inactive archived legacy definitions
+without changing the original outcome code, label or details. Migration `h70f5e1c9a63`
+adds the persistent idempotency journal.

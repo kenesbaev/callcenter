@@ -48,6 +48,13 @@ class CallChannel(StrEnum):
     DEVELOPMENT_SIMULATOR = "development_simulator"
 
 
+class CallResultCategory(StrEnum):
+    SUCCESSFUL = "successful"
+    INTERMEDIATE = "intermediate"
+    UNREACHABLE = "unreachable"
+    UNSUCCESSFUL = "unsuccessful"
+
+
 class TranscriptSpeaker(StrEnum):
     CUSTOMER = "customer"
     AI = "ai"

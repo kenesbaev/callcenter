@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import delete, func, select
 
 from teamora_api.audit import write_audit
+from teamora_api.call_result_service import seed_default_definitions
 from teamora_api.config import get_settings
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import LanguageCode, RoleName
@@ -623,6 +624,12 @@ async def create_project(
     )
     session.add(catalog)
     await session.flush()
+    await seed_default_definitions(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=project.id,
+        catalog_id=catalog.id,
+    )
     await write_audit(
         session,
         tenant_id=principal.tenant_id,

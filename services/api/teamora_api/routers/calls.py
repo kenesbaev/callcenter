@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from sqlalchemy import and_, func, or_, select
 
 from teamora_api.audit import write_audit
 from teamora_api.call_flow_service import active_version_for_project
+from teamora_api.call_result_service import localized_result_name
 from teamora_api.config import get_settings
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import CallChannel, CallStatus
@@ -18,6 +21,8 @@ from teamora_api.models import (
     CallEvent,
     CallOutcome,
     CallParticipant,
+    CallResultDefinition,
+    CallResultSubmission,
     CallSummary,
     Customer,
     CustomerContact,
@@ -29,6 +34,7 @@ from teamora_api.models import (
 from teamora_api.project_access import resolve_project
 from teamora_api.schemas.calls import (
     CallDetail,
+    CallOutcomeSnapshotRead,
     CallRead,
     CallResultRequest,
     CallResultResponse,
@@ -389,17 +395,52 @@ async def hangup_call(
     return serialize_call(call)
 
 
-RESULT_LABELS = {
-    "success": "Успешно",
-    "no_answer": "Нет ответа",
-    "busy": "Занято",
-    "callback": "Перезвон",
-    "wrong_number": "Неверный номер",
-    "do_not_call": "Не звонить",
-    "not_interested": "Не заинтересован",
-    "failed": "Ошибка",
-    "other": "Другое",
-}
+def outcome_snapshot(outcome: CallOutcome) -> CallOutcomeSnapshotRead:
+    return CallOutcomeSnapshotRead(
+        result_definition_id=outcome.result_definition_id,
+        code=outcome.code,
+        label=outcome.label,
+        category=outcome.category,
+        color=outcome.color,
+    )
+
+
+def result_fingerprint(payload: CallResultRequest, result_definition_id: UUID) -> str:
+    body = json.dumps(
+        {
+            "result_definition_id": str(result_definition_id),
+            "comment": payload.comment.strip(),
+            "callback_at": payload.callback_at.isoformat() if payload.callback_at else None,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+async def result_definition_for_call(
+    session: SessionDep,
+    *,
+    tenant_id: UUID,
+    project_id: UUID,
+    result_definition_id: UUID | None,
+    legacy_code: str | None,
+) -> CallResultDefinition:
+    filters = [
+        CallResultDefinition.tenant_id == tenant_id,
+        CallResultDefinition.project_id == project_id,
+    ]
+    if result_definition_id is not None:
+        filters.append(CallResultDefinition.id == result_definition_id)
+    else:
+        filters.append(CallResultDefinition.system_code == legacy_code)
+    definition = await session.scalar(select(CallResultDefinition).where(*filters))
+    if definition is None:
+        raise ApiError(422, "call_result_invalid", "Результат не принадлежит проекту звонка")
+    if not definition.is_active or definition.archived_at is not None:
+        raise ApiError(409, "call_result_unavailable", "Результат архивирован или отключён")
+    return definition
 
 
 @router.get("/active", response_model=CallRead | None)
@@ -437,15 +478,11 @@ async def save_call_result(
     request: Request,
     session: SessionDep,
     principal: Principal = require_permission("dialer:use"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
 ) -> CallResultResponse:
     now = datetime.now(UTC)
-    if payload.result == "callback":
-        if payload.callback_at is None or payload.callback_at.tzinfo is None:
-            raise ApiError(422, "callback_date_required", "Укажите дату и время перезвона")
-        if payload.callback_at.astimezone(UTC) <= now:
-            raise ApiError(422, "callback_date_past", "Дата перезвона должна быть в будущем")
-
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
+    project = await resolve_project(session, principal, call.project_id, active_only=False)
     if call.customer_id is None:
         raise ApiError(409, "call_customer_missing", "У звонка отсутствует клиент")
     customer = await session.scalar(
@@ -453,6 +490,49 @@ async def save_call_result(
     )
     if customer is None:
         raise ApiError(404, "customer_not_found", "Клиент не найден")
+
+    definition = await result_definition_for_call(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=call.project_id,
+        result_definition_id=payload.result_definition_id,
+        legacy_code=payload.legacy_result_code(),
+    )
+    comment = payload.comment.strip()
+    if definition.requires_comment and not comment:
+        raise ApiError(422, "call_result_comment_required", "Для этого результата нужен комментарий")
+    if definition.requires_callback_at and (
+        payload.callback_at is None or payload.callback_at.tzinfo is None
+    ):
+        raise ApiError(422, "callback_date_required", "Укажите дату и время перезвона")
+    if payload.callback_at is not None:
+        if payload.callback_at.tzinfo is None:
+            raise ApiError(422, "callback_timezone_required", "Укажите часовой пояс перезвона")
+        if payload.callback_at.astimezone(UTC) <= now:
+            raise ApiError(422, "callback_date_past", "Дата перезвона должна быть в будущем")
+
+    fingerprint = result_fingerprint(payload, definition.id)
+    if idempotency_key is not None:
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended(
+                        f"{principal.tenant_id}:{idempotency_key}",
+                        0,
+                    )
+                )
+            )
+        )
+        replay = await session.scalar(
+            select(CallResultSubmission).where(
+                CallResultSubmission.tenant_id == principal.tenant_id,
+                CallResultSubmission.idempotency_key == idempotency_key,
+            )
+        )
+        if replay is not None:
+            if replay.request_fingerprint != fingerprint:
+                raise ApiError(409, "idempotency_key_reused", "Idempotency-Key уже использован")
+            return CallResultResponse.model_validate(replay.response_payload)
 
     if call.status in (CallStatus.RINGING, CallStatus.ACTIVE):
         call.status = CallStatus.COMPLETED
@@ -474,18 +554,38 @@ async def save_call_result(
     )
     previous_comment = "" if outcome is None else str(outcome.details.get("comment", ""))
     if outcome is None:
-        outcome = CallOutcome(tenant_id=principal.tenant_id, call_id=call.id)
+        outcome = CallOutcome(
+            tenant_id=principal.tenant_id,
+            project_id=call.project_id,
+            call_id=call.id,
+            result_definition_id=definition.id,
+            code=definition.system_code,
+            label=definition.name,
+            category=definition.category,
+            color=definition.color,
+            label_translations=definition.name_translations,
+        )
         session.add(outcome)
-    outcome.code = payload.result
-    outcome.label = RESULT_LABELS[payload.result]
-    outcome.details = {"comment": payload.comment.strip()}
-    if payload.comment.strip() and payload.comment.strip() != previous_comment:
+    outcome.project_id = call.project_id
+    outcome.result_definition_id = definition.id
+    outcome.code = definition.system_code
+    outcome.label = localized_result_name(
+        definition,
+        call.language.value
+        if call.language
+        else (customer.preferred_language.value if customer.preferred_language else "ru"),
+    )
+    outcome.category = definition.category
+    outcome.color = definition.color
+    outcome.label_translations = dict(definition.name_translations)
+    outcome.details = {"comment": comment, "creates_task_requested": definition.creates_task}
+    if comment and comment != previous_comment:
         session.add(
             CustomerNote(
                 tenant_id=principal.tenant_id,
                 customer_id=customer.id,
                 author_user_id=principal.user_id,
-                content=payload.comment.strip(),
+                content=comment,
             )
         )
 
@@ -502,31 +602,59 @@ async def save_call_result(
         task.status = "completed"
         task.completed_at = now
 
-    new_callback: CallbackTask | None = None
-    if payload.result == "callback" and payload.callback_at:
-        new_callback = await session.scalar(
-            select(CallbackTask).where(
+    pending_callbacks = list(
+        await session.scalars(
+            select(CallbackTask)
+            .where(
                 CallbackTask.tenant_id == principal.tenant_id,
                 CallbackTask.call_id == call.id,
                 CallbackTask.status == "pending",
             )
+            .order_by(CallbackTask.created_at)
         )
-        if new_callback is None:
+    )
+    new_callback: CallbackTask | None = None
+    if definition.requires_callback:
+        due_at = payload.callback_at
+        if due_at is None:
+            configured_delay = project.callback_rules.get("default_delay_minutes", 60)
+            delay = configured_delay if isinstance(configured_delay, int) else 60
+            due_at = now + timedelta(minutes=delay)
+        due_at = due_at.astimezone(UTC)
+        if pending_callbacks:
+            new_callback = pending_callbacks[0]
+            new_callback.due_at = due_at
+            new_callback.assigned_user_id = principal.user_id
+            new_callback.note = comment
+            for duplicate_callback in pending_callbacks[1:]:
+                duplicate_callback.status = "cancelled"
+                duplicate_callback.completed_at = now
+        else:
             new_callback = CallbackTask(
                 tenant_id=principal.tenant_id,
                 project_id=customer.project_id,
                 customer_id=customer.id,
                 call_id=call.id,
                 assigned_user_id=principal.user_id,
-                due_at=payload.callback_at.astimezone(UTC),
+                due_at=due_at,
                 status="pending",
-                note=payload.comment.strip(),
+                note=comment,
             )
             session.add(new_callback)
         customer.status = "callback"
         customer.next_call_at = new_callback.due_at
     else:
-        customer.status = "do_not_call" if payload.result == "do_not_call" else "completed"
+        for pending_callback in pending_callbacks:
+            pending_callback.status = "cancelled"
+            pending_callback.completed_at = now
+        if definition.do_not_call:
+            customer.status = "do_not_call"
+        elif definition.return_to_queue:
+            customer.status = definition.next_customer_status or "new"
+        elif definition.next_customer_status:
+            customer.status = definition.next_customer_status
+        elif definition.completes_customer:
+            customer.status = "completed"
         customer.next_call_at = None
     customer.locked_by_user_id = None
     customer.locked_until = None
@@ -537,7 +665,12 @@ async def save_call_result(
         tenant_id=principal.tenant_id,
         call_id=call.id,
         event_type="call.result_saved",
-        safe_payload={"result": payload.result, "callback": new_callback is not None},
+        safe_payload={
+            "result_definition_id": str(definition.id),
+            "result": definition.system_code,
+            "category": definition.category.value,
+            "callback": new_callback is not None,
+        },
     )
     await write_audit(
         session,
@@ -547,14 +680,31 @@ async def save_call_result(
         resource_type="call",
         resource_id=call.id,
         correlation_id=request.state.correlation_id,
-        safe_metadata={"result": payload.result},
+        safe_metadata={
+            "result_definition_id": str(definition.id),
+            "result": definition.system_code,
+            "category": definition.category.value,
+        },
     )
-    await session.commit()
-    return CallResultResponse(
+    await session.flush()
+    response = CallResultResponse(
         call=serialize_call(call),
         customer_status=customer.status,
         callback_task_id=new_callback.id if new_callback else None,
+        outcome=outcome_snapshot(outcome),
     )
+    if idempotency_key is not None:
+        session.add(
+            CallResultSubmission(
+                tenant_id=principal.tenant_id,
+                outcome_id=outcome.id,
+                idempotency_key=idempotency_key,
+                request_fingerprint=fingerprint,
+                response_payload=response.model_dump(mode="json"),
+            )
+        )
+    await session.commit()
+    return response
 
 
 @router.get("", response_model=Page[CallRead])

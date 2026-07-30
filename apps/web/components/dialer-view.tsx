@@ -13,57 +13,63 @@ import {
   UserRound,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button, StatusBadge } from "@teamora/ui";
-import { ApiClientError, apiRequest } from "@/lib/api";
+import { ApiClientError, apiRequest, idempotencyKey } from "@/lib/api";
 import type {
   Call,
+  CallResultCatalog,
+  CallResultCategory,
+  CallResultDefinition,
   CallResultResponse,
   DialerAssignment,
   Page,
   Project,
 } from "@/lib/types";
 
-const resultSchema = z
-  .object({
-    result: z.enum([
-      "success",
-      "no_answer",
-      "busy",
-      "callback",
-      "wrong_number",
-      "do_not_call",
-      "not_interested",
-      "failed",
-      "other",
-    ]),
-    comment: z.string().max(4000),
-    callback_at: z.string(),
-  })
-  .superRefine((value, context) => {
-    if (value.result === "callback" && !value.callback_at) {
-      context.addIssue({
-        code: "custom",
-        path: ["callback_at"],
-        message: "Укажите дату и время перезвона",
-      });
-    }
-  });
+const resultSchema = z.object({
+  result_definition_id: z.string().min(1, "Выберите результат"),
+  comment: z.string().max(4000),
+  callback_at: z.string(),
+});
 
 type ResultForm = z.infer<typeof resultSchema>;
 
-const resultOptions = [
-  ["success", "Успешно"],
-  ["no_answer", "Нет ответа"],
-  ["busy", "Занято"],
-  ["callback", "Перезвон"],
-  ["wrong_number", "Неверный номер"],
-  ["do_not_call", "Не звонить"],
-  ["not_interested", "Не заинтересован"],
-  ["failed", "Ошибка"],
-  ["other", "Другое"],
-] as const;
+const categoryLabels: Record<CallResultCategory, string> = {
+  successful: "Успешные",
+  intermediate: "Промежуточные",
+  unreachable: "Недозвон",
+  unsuccessful: "Неуспешные",
+};
+
+export function localizedResult(
+  definition: CallResultDefinition,
+  language: string | null | undefined,
+) {
+  const normalized = (language ?? "ru").toLowerCase();
+  return (
+    definition.name_translations[normalized] ??
+    definition.name_translations[normalized.split("-", 1)[0]] ??
+    definition.name_translations.ru ??
+    definition.name
+  );
+}
+
+export function groupCallResults(definitions: CallResultDefinition[]) {
+  return Object.fromEntries(
+    (Object.keys(categoryLabels) as CallResultCategory[]).map((category) => [
+      category,
+      definitions.filter(
+        (definition) =>
+          definition.category === category &&
+          definition.is_active &&
+          !definition.archived_at,
+      ),
+    ]),
+  ) as Record<CallResultCategory, CallResultDefinition[]>;
+}
 
 function formatTimer(seconds: number) {
   const minutes = Math.floor(seconds / 60)
@@ -126,6 +132,14 @@ export function DialerView() {
     queryFn: () => apiRequest<Call | null>("/calls/active"),
     refetchInterval: 5000,
   });
+  const callResults = useQuery({
+    queryKey: ["call-results", "available", selectedProjectId],
+    queryFn: () =>
+      apiRequest<CallResultCatalog>(
+        `/call-results/available?project_id=${selectedProjectId}`,
+      ),
+    enabled: Boolean(selectedProjectId),
+  });
   const history = useQuery({
     queryKey: ["calls", "dialer-history", assignment.data?.customer.id],
     queryFn: () =>
@@ -136,11 +150,33 @@ export function DialerView() {
   });
   const resultForm = useForm<ResultForm>({
     resolver: zodResolver(resultSchema),
-    defaultValues: { result: "success", comment: "", callback_at: "" },
+    defaultValues: {
+      result_definition_id: "",
+      comment: "",
+      callback_at: "",
+    },
   });
-  const selectedResult = resultForm.watch("result");
+  const selectedResultId = resultForm.watch("result_definition_id");
+  const selectedResult = callResults.data?.definitions.find(
+    (definition) => definition.id === selectedResultId,
+  );
+  const groupedResults = useMemo(
+    () => groupCallResults(callResults.data?.definitions ?? []),
+    [callResults.data],
+  );
   const call = activeCall.data;
   const seconds = useCallSeconds(call);
+
+  useEffect(() => {
+    const available = callResults.data?.definitions ?? [];
+    if (!available.length) return;
+    if (!available.some((definition) => definition.id === selectedResultId)) {
+      const defaultResult =
+        available.find((definition) => definition.category === "successful") ??
+        available[0];
+      resultForm.setValue("result_definition_id", defaultResult.id);
+    }
+  }, [callResults.data, resultForm, selectedResultId]);
 
   const nextClient = useMutation({
     mutationFn: () =>
@@ -191,11 +227,12 @@ export function DialerView() {
     mutationFn: (value: ResultForm) =>
       apiRequest<CallResultResponse>(`/calls/${call?.id}/result`, {
         method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey("dialer-result") },
         body: JSON.stringify({
-          result: value.result,
+          result_definition_id: value.result_definition_id,
           comment: value.comment,
           callback_at:
-            value.result === "callback" && value.callback_at
+            selectedResult?.requires_callback && value.callback_at
               ? new Date(value.callback_at).toISOString()
               : null,
         }),
@@ -214,6 +251,25 @@ export function DialerView() {
     },
     onError: showError,
   });
+
+  function submitResult(value: ResultForm) {
+    let valid = true;
+    if (selectedResult?.requires_comment && !value.comment.trim()) {
+      resultForm.setError("comment", {
+        type: "required",
+        message: "Для выбранного результата нужен комментарий",
+      });
+      valid = false;
+    }
+    if (selectedResult?.requires_callback_at && !value.callback_at) {
+      resultForm.setError("callback_at", {
+        type: "required",
+        message: "Укажите дату и время перезвона",
+      });
+      valid = false;
+    }
+    if (valid) saveResult.mutate(value);
+  }
   const release = useMutation({
     mutationFn: () =>
       apiRequest<void>(
@@ -452,9 +508,7 @@ export function DialerView() {
               {call?.status === "completed" && (
                 <form
                   className="call-result-form"
-                  onSubmit={resultForm.handleSubmit((value) =>
-                    saveResult.mutate(value),
-                  )}
+                  onSubmit={resultForm.handleSubmit(submitResult)}
                 >
                   <div className="row-between">
                     <div>
@@ -463,19 +517,65 @@ export function DialerView() {
                     </div>
                     <CheckCircle2 size={20} />
                   </div>
-                  <div className="result-choice-grid">
-                    {resultOptions.map(([value, label]) => (
-                      <label key={value}>
-                        <input
-                          type="radio"
-                          value={value}
-                          {...resultForm.register("result")}
-                        />
-                        <span>{label}</span>
-                      </label>
-                    ))}
-                  </div>
-                  {selectedResult === "callback" && (
+                  {callResults.isPending ? (
+                    <p className="panel-subtitle">
+                      Загружаем результаты проекта…
+                    </p>
+                  ) : callResults.isError ? (
+                    <div className="dialer-message">
+                      Не удалось загрузить каталог результатов.
+                    </div>
+                  ) : (
+                    <div className="result-category-stack">
+                      {(
+                        Object.keys(categoryLabels) as CallResultCategory[]
+                      ).map((category) => {
+                        const items = groupedResults[category];
+                        if (!items.length) return null;
+                        return (
+                          <fieldset
+                            className={`result-category ${category}`}
+                            key={category}
+                          >
+                            <legend>{categoryLabels[category]}</legend>
+                            <div className="result-choice-grid">
+                              {items.map((definition) => (
+                                <label
+                                  key={definition.id}
+                                  style={
+                                    {
+                                      "--result-color": definition.color,
+                                    } as CSSProperties
+                                  }
+                                >
+                                  <input
+                                    type="radio"
+                                    value={definition.id}
+                                    {...resultForm.register(
+                                      "result_definition_id",
+                                    )}
+                                  />
+                                  <span>
+                                    {localizedResult(
+                                      definition,
+                                      assignment.data?.customer
+                                        .preferred_language,
+                                    )}
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          </fieldset>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {resultForm.formState.errors.result_definition_id && (
+                    <small className="field-error">
+                      {resultForm.formState.errors.result_definition_id.message}
+                    </small>
+                  )}
+                  {selectedResult?.requires_callback && (
                     <div className="field">
                       <label htmlFor="callback-at">
                         Дата и время перезвона
@@ -494,15 +594,23 @@ export function DialerView() {
                     </div>
                   )}
                   <div className="field">
-                    <label htmlFor="call-comment">Комментарий</label>
+                    <label htmlFor="call-comment">
+                      Комментарий
+                      {selectedResult?.requires_comment ? " · обязательно" : ""}
+                    </label>
                     <textarea
                       id="call-comment"
                       placeholder="Кратко зафиксируйте договорённости"
                       rows={3}
                       {...resultForm.register("comment")}
                     />
+                    {resultForm.formState.errors.comment && (
+                      <small className="field-error">
+                        {resultForm.formState.errors.comment.message}
+                      </small>
+                    )}
                   </div>
-                  <Button disabled={isBusy} type="submit">
+                  <Button disabled={isBusy || !selectedResult} type="submit">
                     {saveResult.isPending
                       ? "Сохраняем…"
                       : "Сохранить результат"}

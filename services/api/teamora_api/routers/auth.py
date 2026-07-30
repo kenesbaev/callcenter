@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, Response
 from sqlalchemy import select
 
 from teamora_api.audit import write_audit
+from teamora_api.call_result_service import seed_default_definitions
 from teamora_api.config import get_settings
 from teamora_api.db import set_tenant_context
 from teamora_api.dependencies import PrincipalDep, SessionDep
@@ -108,13 +109,19 @@ async def register(
         )
         session.add(project)
         await session.flush()
-        session.add(
-            CallResultCatalog(
-                tenant_id=tenant.id,
-                project_id=project.id,
-                name="Результаты звонка",
-                is_active=True,
-            )
+        catalog = CallResultCatalog(
+            tenant_id=tenant.id,
+            project_id=project.id,
+            name="Результаты звонка",
+            is_active=True,
+        )
+        session.add(catalog)
+        await session.flush()
+        await seed_default_definitions(
+            session,
+            tenant_id=tenant.id,
+            project_id=project.id,
+            catalog_id=catalog.id,
         )
         session.add(
             ProjectUser(

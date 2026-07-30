@@ -11,6 +11,7 @@ import {
   FolderKanban,
   Gauge,
   Languages,
+  ListChecks,
   Phone,
   Plus,
   Radio,
@@ -591,13 +592,22 @@ export function ProjectsView() {
                       <StatusBadge tone="success">Сохранено</StatusBadge>
                     )}
                     {!creating && selectedProject && (
-                      <Link
-                        className="tv-button tv-button-secondary"
-                        href={`/app/projects/${selectedProject.id}/flow`}
-                      >
-                        <Workflow size={16} />
-                        Сценарий
-                      </Link>
+                      <>
+                        <Link
+                          className="tv-button tv-button-secondary"
+                          href={`/app/projects/${selectedProject.id}/results`}
+                        >
+                          <ListChecks size={16} />
+                          Результаты
+                        </Link>
+                        <Link
+                          className="tv-button tv-button-secondary"
+                          href={`/app/projects/${selectedProject.id}/flow`}
+                        >
+                          <Workflow size={16} />
+                          Сценарий
+                        </Link>
+                      </>
                     )}
                     {!creating &&
                       selectedProject &&
@@ -731,10 +741,11 @@ function ProjectEditorFields({
           <div className="project-extension-card project-form-wide">
             <Settings2 size={18} />
             <div>
-              <strong>Каталог результатов подготовлен</strong>
+              <strong>Каталог результатов подключён</strong>
               <p>
                 Связь проекта: <code>{project.call_result_catalog_id}</code>.
-                Состав результатов будет настроен на Этапе 5.
+                Управляйте категориями, переводами и правилами через кнопку
+                «Результаты».
               </p>
             </div>
           </div>
