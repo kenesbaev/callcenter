@@ -48,6 +48,36 @@ class CallChannel(StrEnum):
     DEVELOPMENT_SIMULATOR = "development_simulator"
 
 
+class TelephonyCommandName(StrEnum):
+    ORIGINATE = "originate"
+    ANSWER = "answer"
+    HANGUP = "hangup"
+    HOLD = "hold"
+    RESUME = "resume"
+    TRANSFER = "transfer"
+    GET_CALL_STATE = "get_call_state"
+    START_RECORDING = "start_recording"
+    PAUSE_RECORDING = "pause_recording"
+    RESUME_RECORDING = "resume_recording"
+    STOP_RECORDING = "stop_recording"
+    CREATE_EXTERNAL_MEDIA = "create_external_media"
+
+
+class TelephonyCallState(StrEnum):
+    QUEUED = "queued"
+    RINGING = "ringing"
+    ACTIVE = "active"
+    ON_HOLD = "on_hold"
+    TRANSFER_REQUESTED = "transfer_requested"
+    TRANSFERRED = "transferred"
+    COMPLETED = "completed"
+    BUSY = "busy"
+    NO_ANSWER = "no_answer"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
 class CallResultCategory(StrEnum):
     SUCCESSFUL = "successful"
     INTERMEDIATE = "intermediate"

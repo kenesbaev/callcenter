@@ -9,6 +9,9 @@ import {
   Phone,
   PhoneCall,
   PhoneOff,
+  PauseCircle,
+  PlayCircle,
+  PhoneForwarded,
   RotateCcw,
   ListTodo,
   UserRound,
@@ -221,6 +224,7 @@ export function DialerView() {
     mutationFn: () =>
       apiRequest<Call>("/calls/start", {
         method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey("dialer-start") },
         body: JSON.stringify({
           customer_id: assignment.data?.customer.id,
           lock_token: assignment.data?.lock_token,
@@ -236,16 +240,58 @@ export function DialerView() {
   });
   const answerCall = useMutation({
     mutationFn: () =>
-      apiRequest<Call>(`/calls/${call?.id}/answer`, { method: "POST" }),
+      apiRequest<Call>(`/calls/${call?.id}/answer`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey("dialer-answer") },
+      }),
     onSuccess: (value) =>
       queryClient.setQueryData(["dialer", "active-call"], value),
     onError: showError,
   });
   const hangupCall = useMutation({
     mutationFn: () =>
-      apiRequest<Call>(`/calls/${call?.id}/hangup`, { method: "POST" }),
+      apiRequest<Call>(`/calls/${call?.id}/hangup`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey("dialer-hangup") },
+      }),
     onSuccess: (value) =>
       queryClient.setQueryData(["dialer", "active-call"], value),
+    onError: showError,
+  });
+  const holdCall = useMutation({
+    mutationFn: () =>
+      apiRequest<Call>(`/calls/${call?.id}/hold`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey("dialer-hold") },
+      }),
+    onSuccess: (value) =>
+      queryClient.setQueryData(["dialer", "active-call"], value),
+    onError: showError,
+  });
+  const resumeCall = useMutation({
+    mutationFn: () =>
+      apiRequest<Call>(`/calls/${call?.id}/resume`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey("dialer-resume") },
+      }),
+    onSuccess: (value) =>
+      queryClient.setQueryData(["dialer", "active-call"], value),
+    onError: showError,
+  });
+  const transferCall = useMutation({
+    mutationFn: () =>
+      apiRequest<Call>(`/calls/${call?.id}/transfer`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey("dialer-transfer") },
+        body: JSON.stringify({
+          destination: "operator-queue",
+          reason: "operator_requested",
+        }),
+      }),
+    onSuccess: (value) => {
+      queryClient.setQueryData(["dialer", "active-call"], value);
+      setMessage("Звонок передан в очередь операторов Mock-провайдера.");
+    },
     onError: showError,
   });
   const saveResult = useMutation({
@@ -401,6 +447,9 @@ export function DialerView() {
     startCall.isPending ||
     answerCall.isPending ||
     hangupCall.isPending ||
+    holdCall.isPending ||
+    resumeCall.isPending ||
+    transferCall.isPending ||
     saveResult.isPending ||
     release.isPending;
 
@@ -550,6 +599,9 @@ export function DialerView() {
                       {formatTimer(seconds)}
                     </strong>
                     <small>{call.to_number}</small>
+                    <small>
+                      {call.provider} · {call.provider_state}
+                    </small>
                   </div>
                   <div className="call-control-row">
                     {call.status === "ringing" && (
@@ -561,6 +613,38 @@ export function DialerView() {
                         Имитировать ответ
                       </Button>
                     )}
+                    {call.status === "active" &&
+                      call.provider_state === "active" && (
+                        <>
+                          <Button
+                            disabled={isBusy}
+                            onClick={() => holdCall.mutate()}
+                            variant="secondary"
+                          >
+                            <PauseCircle size={17} />
+                            Удержать
+                          </Button>
+                          <Button
+                            disabled={isBusy}
+                            onClick={() => transferCall.mutate()}
+                            variant="secondary"
+                          >
+                            <PhoneForwarded size={17} />
+                            Перевести
+                          </Button>
+                        </>
+                      )}
+                    {call.status === "active" &&
+                      call.provider_state === "on_hold" && (
+                        <Button
+                          disabled={isBusy}
+                          onClick={() => resumeCall.mutate()}
+                          variant="secondary"
+                        >
+                          <PlayCircle size={17} />
+                          Продолжить
+                        </Button>
+                      )}
                     {(call.status === "ringing" ||
                       call.status === "active") && (
                       <button

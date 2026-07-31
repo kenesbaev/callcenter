@@ -214,6 +214,9 @@ Full transcripts, audio, secrets and tool payloads containing PII are prohibited
 
 ## Provider interfaces
 
+The concrete Stage 7 command/event boundary and project-aware provider selection are
+documented in [telephony-layer.md](telephony-layer.md).
+
 Provider ports live in shared contracts and are implemented behind factories:
 
 - `RealtimeVoiceProvider`: create/update/close session, append audio, handle audio/events/tool requests and interruption.

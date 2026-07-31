@@ -21,12 +21,14 @@ export type SafeSessionEvent = {
   type: string;
   callId: string;
   tenantId: string;
+  projectId: string;
   safeData?: Record<string, boolean | number | string>;
 };
 
 type ControllerOptions = {
   callId: string;
   tenantId: string;
+  projectId: string;
   channelId: string;
   config: RealtimeSessionConfig;
   provider: RealtimeVoiceProvider;
@@ -65,6 +67,7 @@ export class VoiceSessionController {
       type: "audio.barge_in",
       callId: this.options.callId,
       tenantId: this.options.tenantId,
+      projectId: this.options.projectId,
     });
   }
 
@@ -73,8 +76,18 @@ export class VoiceSessionController {
       throw new Error("Only active calls can transfer");
     this.currentState = "transferring";
     await this.providerSession.close("human_transfer");
+    const commandId = crypto.randomUUID();
     await this.options.telephony.transfer(
-      this.options.channelId,
+      {
+        tenantId: this.options.tenantId,
+        projectId: this.options.projectId,
+        callId: this.options.callId,
+        providerCallId: this.options.channelId,
+        commandId,
+        idempotencyKey: `${this.options.callId}:transfer:${commandId}`,
+        timestamp: new Date().toISOString(),
+        correlationId: commandId,
+      },
       queue,
       reason,
     );
@@ -82,6 +95,7 @@ export class VoiceSessionController {
       type: "call.transfer",
       callId: this.options.callId,
       tenantId: this.options.tenantId,
+      projectId: this.options.projectId,
       safeData: { reason, queue },
     });
   }
@@ -95,6 +109,7 @@ export class VoiceSessionController {
       type: "session.closed",
       callId: this.options.callId,
       tenantId: this.options.tenantId,
+      projectId: this.options.projectId,
       safeData: { reason },
     });
   }
@@ -118,6 +133,7 @@ export class VoiceSessionController {
         type: "session.failed",
         callId: this.options.callId,
         tenantId: this.options.tenantId,
+        projectId: this.options.projectId,
         safeData: {
           code: error instanceof Error ? error.name : "connection_error",
         },
@@ -130,6 +146,7 @@ export class VoiceSessionController {
       type: "session.reconnect",
       callId: this.options.callId,
       tenantId: this.options.tenantId,
+      projectId: this.options.projectId,
       safeData: { attempt: this.reconnects },
     });
     await this.connect();
@@ -169,6 +186,7 @@ export class VoiceSessionController {
         type: `provider.${event.type}`,
         callId: this.options.callId,
         tenantId: this.options.tenantId,
+        projectId: this.options.projectId,
       });
   }
 }

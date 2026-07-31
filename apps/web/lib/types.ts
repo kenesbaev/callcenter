@@ -68,6 +68,21 @@ export type Call = {
   call_flow_version_id?: string | null;
   direction: string;
   provider: string;
+  provider_call_id: string | null;
+  provider_state:
+    | "queued"
+    | "ringing"
+    | "active"
+    | "on_hold"
+    | "transfer_requested"
+    | "transferred"
+    | "completed"
+    | "busy"
+    | "no_answer"
+    | "failed"
+    | "cancelled"
+    | "unknown";
+  recording_state: string;
   from_number: string | null;
   to_number: string | null;
   started_at: string | null;

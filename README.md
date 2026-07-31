@@ -199,6 +199,19 @@ replacement and do-not-call cancellation are synchronized without deleting compl
 history. Run `py -3.12 scripts/run_task_migration_test.py` to verify preservation of a
 legacy callback and its call/outcome links through Stage 6 upgrade and downgrade.
 
+## Unified telephony control plane
+
+Call routers now use a project-aware `TelephonyService`. Development/test calls use a
+deterministic `MockTelephonyProvider`; configured project phone numbers select the
+authenticated Voice Gateway and shared Asterisk ARI adapter. Commands and provider
+events are idempotent, audited and tenant-scoped.
+
+See [docs/telephony-layer.md](docs/telephony-layer.md) for the service boundary,
+command/event contracts, environment variable names and live verification checklist.
+The ARI adapter is implemented but still requires live Asterisk/SIP verification; no
+carrier or OpenAI voice claim is made. The isolated preservation check is
+`py -3.12 scripts/run_telephony_migration_test.py`.
+
 ## Language readiness
 
 | Language           | Status            | Rule                                                                       |

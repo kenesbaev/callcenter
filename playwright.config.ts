@@ -5,6 +5,7 @@ const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3100";
 const apiURL = process.env.E2E_API_URL ?? "http://127.0.0.1:8100";
 const databaseURL = process.env.E2E_DATABASE_URL;
 const migrationDatabaseURL = process.env.E2E_MIGRATION_DATABASE_URL;
+const externalServers = process.env.E2E_EXTERNAL_SERVERS === "true";
 
 if (!databaseURL || !migrationDatabaseURL) {
   throw new Error(
@@ -59,29 +60,31 @@ export default defineConfig({
       },
     },
   ],
-  webServer: [
-    {
-      command:
-        `${pythonExecutable} -m uvicorn teamora_api.main:app --app-dir services/api ` +
-        "--host 127.0.0.1 --port 8100",
-      url: `${apiURL}/api/v1/health/ready`,
-      timeout: 120_000,
-      reuseExistingServer: false,
-      env: {
-        ...process.env,
-        APP_ENV: "test",
-        ENABLE_CALL_SIMULATOR: "true",
-        DATABASE_URL: databaseURL,
-        MIGRATION_DATABASE_URL: migrationDatabaseURL,
-        CORS_ORIGINS: `${baseURL},http://localhost:3000,http://localhost:8080`,
-      },
-    },
-    {
-      command: `${nodeExecutable} ${nextExecutable} dev apps/web -p 3100`,
-      url: baseURL,
-      timeout: 120_000,
-      reuseExistingServer: false,
-      env: { ...process.env, API_INTERNAL_URL: apiURL },
-    },
-  ],
+  webServer: externalServers
+    ? undefined
+    : [
+        {
+          command:
+            `${pythonExecutable} -m uvicorn teamora_api.main:app --app-dir services/api ` +
+            "--host 127.0.0.1 --port 8100",
+          url: `${apiURL}/api/v1/health/ready`,
+          timeout: 120_000,
+          reuseExistingServer: false,
+          env: {
+            ...process.env,
+            APP_ENV: "test",
+            ENABLE_CALL_SIMULATOR: "true",
+            DATABASE_URL: databaseURL,
+            MIGRATION_DATABASE_URL: migrationDatabaseURL,
+            CORS_ORIGINS: `${baseURL},http://localhost:3000,http://localhost:8080`,
+          },
+        },
+        {
+          command: `${nodeExecutable} ${nextExecutable} dev apps/web -p 3100`,
+          url: baseURL,
+          timeout: 120_000,
+          reuseExistingServer: false,
+          env: { ...process.env, API_INTERNAL_URL: apiURL },
+        },
+      ],
 });

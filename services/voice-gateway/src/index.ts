@@ -2,6 +2,8 @@ import { createServer } from "node:http";
 import { gatewayEnvironmentSchema } from "@teamora/config";
 import { logger } from "./logger.js";
 import { registry } from "./metrics.js";
+import { createGatewayRequestHandler } from "./internal-api.js";
+import { AsteriskAriProvider } from "./providers/asterisk-ari.js";
 import { OpenAiRealtimeProvider } from "./providers/openai-realtime.js";
 
 const parsed = gatewayEnvironmentSchema.safeParse(process.env);
@@ -18,12 +20,35 @@ if (!parsed.success) {
   process.exit(1);
 }
 const config = parsed.data;
-const provider = config.OPENAI_API_KEY
+const realtimeProvider = config.OPENAI_API_KEY
   ? new OpenAiRealtimeProvider({ apiKey: config.OPENAI_API_KEY })
   : undefined;
+const telephonyProvider =
+  config.ASTERISK_ARI_URL &&
+  config.ASTERISK_ARI_USERNAME &&
+  config.ASTERISK_ARI_PASSWORD &&
+  config.ASTERISK_EXTERNAL_MEDIA_HOST
+    ? new AsteriskAriProvider({
+        baseUrl: config.ASTERISK_ARI_URL,
+        username: config.ASTERISK_ARI_USERNAME,
+        password: config.ASTERISK_ARI_PASSWORD,
+        externalHost: config.ASTERISK_EXTERNAL_MEDIA_HOST,
+        transport: config.ASTERISK_EXTERNAL_MEDIA_TRANSPORT,
+        timeoutMs: config.ASTERISK_ARI_TIMEOUT_MS,
+      })
+    : undefined;
+const handleInternalRequest = createGatewayRequestHandler({
+  serviceToken: config.GATEWAY_SERVICE_TOKEN,
+  trustedHosts: config.GATEWAY_TRUSTED_HOSTS.split(",")
+    .map((host) => host.trim())
+    .filter(Boolean),
+  maxBodyBytes: config.GATEWAY_MAX_BODY_BYTES,
+  ...(telephonyProvider ? { provider: telephonyProvider } : {}),
+});
 let shuttingDown = false;
 
 const server = createServer(async (request, response) => {
+  if (await handleInternalRequest(request, response)) return;
   const path = new URL(request.url ?? "/", "http://gateway.internal").pathname;
   if (path === "/health/live") {
     response.writeHead(shuttingDown ? 503 : 200, {
@@ -41,8 +66,11 @@ const server = createServer(async (request, response) => {
     response.end(
       JSON.stringify({
         status: shuttingDown ? "stopping" : "ready",
-        openai_realtime: provider
+        openai_realtime: realtimeProvider
           ? "configured_not_end_to_end_verified"
+          : "unavailable",
+        asterisk: telephonyProvider
+          ? "configured_live_verification_required"
           : "unavailable",
       }),
     );
@@ -65,7 +93,12 @@ server.listen(config.GATEWAY_PORT, "0.0.0.0", () =>
   logger.info(
     {
       port: config.GATEWAY_PORT,
-      provider: provider ? "configured_not_verified" : "unavailable",
+      realtimeProvider: realtimeProvider
+        ? "configured_not_verified"
+        : "unavailable",
+      telephonyProvider: telephonyProvider
+        ? "configured_live_verification_required"
+        : "unavailable",
     },
     "voice gateway listening",
   ),
@@ -76,7 +109,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   logger.info({ signal }, "graceful shutdown started");
   server.close();
-  await provider?.shutdown();
+  await realtimeProvider?.shutdown();
   logger.info("graceful shutdown complete");
   process.exit(0);
 }

@@ -42,12 +42,19 @@ class MockProvider implements RealtimeVoiceProvider {
 function setup(provider = new MockProvider()) {
   const telephony = {
     name: "mock",
+    status: "development",
+    originate: vi.fn(),
     answer: vi.fn(),
+    hold: vi.fn(),
+    resume: vi.fn(),
+    getCallState: vi.fn(),
     createExternalMedia: vi.fn(),
     transfer: vi.fn(async () => undefined),
     hangup: vi.fn(),
+    startRecording: vi.fn(),
     pauseRecording: vi.fn(),
     resumeRecording: vi.fn(),
+    stopRecording: vi.fn(),
   } as unknown as TelephonyProvider;
   const emit = vi.fn(async () => undefined);
   const config: RealtimeSessionConfig = {
@@ -69,6 +76,7 @@ function setup(provider = new MockProvider()) {
   const controller = new VoiceSessionController({
     callId: "call-1",
     tenantId: "tenant-1",
+    projectId: "project-1",
     channelId: "channel-1",
     config,
     provider,
@@ -120,7 +128,12 @@ describe("VoiceSessionController", () => {
     await controller.transfer("support", "explicit_request");
     expect(provider.session.close).toHaveBeenCalledWith("human_transfer");
     expect(telephony.transfer).toHaveBeenCalledWith(
-      "channel-1",
+      expect.objectContaining({
+        tenantId: "tenant-1",
+        projectId: "project-1",
+        callId: "call-1",
+        providerCallId: "channel-1",
+      }),
       "support",
       "explicit_request",
     );

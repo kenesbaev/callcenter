@@ -76,17 +76,115 @@ export interface TextToSpeechProvider {
   ): Promise<Uint8Array>;
 }
 
+export const telephonyCommandNames = [
+  "originate",
+  "answer",
+  "hangup",
+  "hold",
+  "resume",
+  "transfer",
+  "get_call_state",
+  "start_recording",
+  "pause_recording",
+  "resume_recording",
+  "stop_recording",
+  "create_external_media",
+] as const;
+
+export type TelephonyCommandName = (typeof telephonyCommandNames)[number];
+export type TelephonyCallState =
+  | "queued"
+  | "ringing"
+  | "active"
+  | "on_hold"
+  | "transfer_requested"
+  | "transferred"
+  | "completed"
+  | "busy"
+  | "no_answer"
+  | "failed"
+  | "cancelled"
+  | "unknown";
+
+export type TelephonyCommandContext = {
+  tenantId: string;
+  projectId: string;
+  callId: string;
+  providerCallId?: string;
+  commandId: string;
+  idempotencyKey: string;
+  timestamp: string;
+  correlationId: string;
+};
+
+export type TelephonyCommand = TelephonyCommandContext & {
+  version: "1";
+  command: TelephonyCommandName;
+  parameters: Record<string, boolean | number | string | undefined>;
+};
+
+export type TelephonyCommandResult = {
+  commandId: string;
+  provider: string;
+  accepted: boolean;
+  state: TelephonyCallState;
+  providerCallId?: string;
+  occurredAt: string;
+  safeMetadata: Record<string, boolean | number | string>;
+};
+
+export type TelephonyProviderEvent = {
+  version: "1";
+  provider: string;
+  providerEventId: string;
+  eventType: string;
+  tenantId: string;
+  projectId: string;
+  callId: string;
+  externalCallId?: string;
+  occurredAt: string;
+  providerTimestamp?: string;
+  correlationId: string;
+  safePayload: Record<string, boolean | number | string>;
+};
+
 export interface TelephonyProvider {
   readonly name: string;
-  answer(channelId: string): Promise<void>;
+  readonly status: ProviderStatus;
+  originate(
+    context: TelephonyCommandContext,
+    parameters: TelephonyCommand["parameters"],
+  ): Promise<TelephonyCommandResult>;
+  answer(context: TelephonyCommandContext): Promise<TelephonyCommandResult>;
+  hangup(
+    context: TelephonyCommandContext,
+    reason: string,
+  ): Promise<TelephonyCommandResult>;
+  hold(context: TelephonyCommandContext): Promise<TelephonyCommandResult>;
+  resume(context: TelephonyCommandContext): Promise<TelephonyCommandResult>;
+  transfer(
+    context: TelephonyCommandContext,
+    destination: string,
+    reason: string,
+  ): Promise<TelephonyCommandResult>;
+  getCallState(
+    context: TelephonyCommandContext,
+  ): Promise<TelephonyCommandResult>;
+  startRecording(
+    context: TelephonyCommandContext,
+  ): Promise<TelephonyCommandResult>;
+  pauseRecording(
+    context: TelephonyCommandContext,
+  ): Promise<TelephonyCommandResult>;
+  resumeRecording(
+    context: TelephonyCommandContext,
+  ): Promise<TelephonyCommandResult>;
+  stopRecording(
+    context: TelephonyCommandContext,
+  ): Promise<TelephonyCommandResult>;
   createExternalMedia(
-    callId: string,
-    channelId: string,
-  ): Promise<{ mediaId: string }>;
-  transfer(channelId: string, queue: string, reason: string): Promise<void>;
-  hangup(channelId: string, reason: string): Promise<void>;
-  pauseRecording(channelId: string): Promise<void>;
-  resumeRecording(channelId: string): Promise<void>;
+    context: TelephonyCommandContext,
+  ): Promise<TelephonyCommandResult>;
 }
 
 export interface CrmProvider {

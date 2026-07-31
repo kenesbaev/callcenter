@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     default_max_concurrent_calls: int = Field(default=5, ge=1, le=10_000)
     max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
     gateway_service_token: SecretStr | None = None
+    gateway_internal_url: str = "http://voice-gateway:8787"
+    gateway_command_timeout_seconds: float = Field(default=5.0, ge=0.25, le=30.0)
+    allow_mock_telephony_in_production: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -64,7 +67,7 @@ class Settings(BaseSettings):
 
     @property
     def mock_telephony_available(self) -> bool:
-        return self.app_env in {"development", "test"}
+        return self.app_env in {"development", "test"} or self.allow_mock_telephony_in_production
 
     @model_validator(mode="after")
     def reject_insecure_production_defaults(self) -> Settings:

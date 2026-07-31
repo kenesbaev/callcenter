@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from teamora_api.enums import (
     CallChannel,
@@ -45,6 +45,8 @@ class CallSummaryRead(BaseModel):
 
 
 class CallRead(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: UUID
     project_id: UUID
     channel: CallChannel
@@ -56,6 +58,9 @@ class CallRead(BaseModel):
     call_flow_version_id: UUID | None
     direction: str
     provider: str
+    provider_call_id: str | None = Field(validation_alias="external_call_id")
+    provider_state: str
+    recording_state: str
     from_number: str | None
     to_number: str | None
     started_at: datetime | None

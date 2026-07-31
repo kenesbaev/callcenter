@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -883,6 +883,9 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     provider: Mapped[str] = mapped_column(String(40), default="mock", nullable=False)
+    provider_state: Mapped[str] = mapped_column(String(40), default="queued", nullable=False)
+    recording_state: Mapped[str] = mapped_column(String(40), default="stopped", nullable=False)
+    provider_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
     from_number: Mapped[str | None] = mapped_column(String(32))
     to_number: Mapped[str | None] = mapped_column(String(32))
     transfer_reason: Mapped[str | None] = mapped_column(String(500))
@@ -928,8 +931,53 @@ class CallEvent(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     safe_payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    provider: Mapped[str | None] = mapped_column(String(40))
+    provider_event_id: Mapped[str | None] = mapped_column(String(200))
+    external_call_id: Mapped[str | None] = mapped_column(String(200))
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    correlation_id: Mapped[str | None] = mapped_column(String(160))
 
-    __table_args__ = (UniqueConstraint("call_id", "sequence"),)
+    __table_args__ = (
+        UniqueConstraint("call_id", "sequence"),
+        Index(
+            "uq_call_events_provider_event",
+            "tenant_id",
+            "provider",
+            "provider_event_id",
+            unique=True,
+            postgresql_where=text("provider_event_id IS NOT NULL"),
+        ),
+    )
+
+
+class TelephonyCommandSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "telephony_command_submissions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_telephony_commands_tenant_project",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_telephony_commands_tenant_key"),
+        Index("ix_telephony_commands_call_created", "call_id", "created_at"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), index=True)
+    command_id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    command_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    response_payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    external_call_id: Mapped[str | None] = mapped_column(String(200))
+    correlation_id: Mapped[str] = mapped_column(String(160), nullable=False)
 
 
 class TranscriptSegment(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
