@@ -170,3 +170,49 @@ test("владелец создаёт клиента с телефоном и e-
     page.getByRole("button", { name: "Архивировать" }),
   ).toBeVisible();
 });
+
+test("оператор проходит полный Mock Dialer и сохраняет результат", async ({
+  page,
+}) => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const customerName = `Dialer E2E ${suffix}`;
+
+  await page.goto("/register");
+  await page.getByLabel("Название компании").fill(`K-Line Dialer ${suffix}`);
+  await page.getByLabel("Адрес компании").fill(`dialer-${suffix}`);
+  await page.getByLabel("Ваше имя").fill("Оператор Dialer");
+  await page.getByLabel("Рабочая почта").fill(`dialer+${suffix}@example.com`);
+  await page.getByLabel("Пароль").fill("SecureDialer123!");
+  await page.getByRole("button", { name: "Создать компанию" }).click();
+
+  await page.getByRole("link", { name: "Клиенты" }).click();
+  await page.getByRole("button", { name: "Новый клиент" }).click();
+  await page.getByLabel("ФИО").fill(customerName);
+  await page.getByLabel("Телефон 1").fill("+998 93 765 43 21");
+  await page.getByLabel("Город").fill("Ташкент");
+  await page.getByRole("button", { name: "Сохранить клиента" }).click();
+  await expect(page.getByText("Клиент создан")).toBeVisible();
+
+  await page.getByRole("link", { name: "Диалер" }).click();
+  await page.getByRole("button", { name: "Следующий клиент" }).click();
+  await expect(page.getByRole("heading", { name: customerName })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Сценарий" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "История" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Задачи" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Позвонить" }).click();
+  await page.getByRole("button", { name: "Имитировать ответ" }).click();
+  await expect(page.getByRole("button", { name: "Удержать" })).toBeVisible();
+  await page.getByRole("button", { name: "Удержать" }).click();
+  await page.getByRole("button", { name: "Продолжить" }).click();
+  await page.getByRole("button", { name: "Завершить звонок" }).click();
+
+  await page.getByText("Успешно", { exact: true }).click();
+  await page.getByRole("button", { name: /Сохранить и следующий/ }).click();
+  await expect(
+    page.getByText("Результат сохранён. Очередь завершена."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Ожидание клиента" }),
+  ).toBeVisible();
+});

@@ -55,13 +55,13 @@ class MockTelephonyProvider:
         elif command.command == TelephonyCommandName.CREATE_EXTERNAL_MEDIA:
             metadata["mediaId"] = f"mock-media:{command.call_id}"
         return TelephonyCommandResult(
-            command_id=command.command_id,
+            commandId=command.command_id,
             provider=self.name,
             accepted=True,
             state=state,
-            provider_call_id=provider_call_id,
-            occurred_at=datetime.now(UTC),
-            safe_metadata=metadata,
+            providerCallId=provider_call_id,
+            occurredAt=datetime.now(UTC),
+            safeMetadata=metadata,
         )
 
     @staticmethod

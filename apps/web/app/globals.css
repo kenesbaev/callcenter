@@ -2878,6 +2878,288 @@ button:disabled {
   line-height: 1.45;
 }
 
+.dialer-contact-picker {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 1fr);
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.dialer-contact-summary,
+.dialer-customer-details > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--tv-text-secondary);
+}
+
+.dialer-contact-summary {
+  min-height: 44px;
+  align-self: end;
+  border: 1px solid var(--tv-border);
+  border-radius: 12px;
+  padding: 0 12px;
+  background: var(--tv-surface-muted);
+}
+
+.dialer-customer-details {
+  display: grid;
+  gap: 10px;
+  margin: -8px 0 20px;
+  border-top: 1px solid var(--tv-border);
+  padding-top: 16px;
+}
+
+.dialer-customer-details p {
+  margin: 0;
+  color: var(--tv-text-secondary);
+  line-height: 1.55;
+}
+
+.dialer-tags {
+  flex-wrap: wrap;
+}
+
+.dialer-custom-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.dialer-custom-fields > div {
+  border: 1px solid var(--tv-border);
+  border-radius: 10px;
+  padding: 9px 11px;
+}
+
+.dialer-custom-fields dt {
+  color: var(--tv-text-secondary);
+  font-size: 11px;
+}
+
+.dialer-custom-fields dd {
+  margin: 3px 0 0;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.dialer-transfer-control {
+  display: flex;
+  gap: 7px;
+}
+
+.dialer-transfer-control select {
+  max-width: 170px;
+  border-color: rgb(255 255 255 / 20%);
+  background: rgb(255 255 255 / 10%);
+  color: #fff;
+}
+
+.dialer-transfer-control option {
+  color: var(--tv-text-primary);
+}
+
+.mock-media-button {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 6%);
+  color: #94a3b8;
+}
+
+.dialer-runtime-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.dialer-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--tv-border);
+  padding: 7px;
+  background: var(--tv-surface-muted);
+}
+
+.dialer-tabs button {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--tv-text-secondary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.dialer-tabs button.active {
+  background: #fff;
+  color: var(--tv-text-primary);
+  box-shadow: 0 4px 14px rgb(15 23 42 / 8%);
+}
+
+.dialer-tab-panel {
+  display: grid;
+  gap: 14px;
+  min-height: 310px;
+  max-height: 660px;
+  overflow: auto;
+  padding: 18px;
+}
+
+.dialer-tab-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: var(--tv-text-secondary);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.dialer-flow-meta select {
+  width: auto;
+  min-width: 86px;
+}
+
+.dialer-flow-node {
+  display: grid;
+  gap: 14px;
+}
+
+.dialer-flow-node h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.dialer-flow-hint,
+.dialer-summary {
+  margin: 0;
+  border-left: 3px solid var(--tv-primary);
+  padding: 10px 12px;
+  background: var(--tv-surface-muted);
+  color: var(--tv-text-secondary);
+  line-height: 1.5;
+}
+
+.dialer-flow-answers,
+.dialer-flow-path,
+.dialer-task-list,
+.dialer-quick-task {
+  display: grid;
+  gap: 9px;
+}
+
+.dialer-flow-answers .tv-button {
+  justify-content: space-between;
+}
+
+.dialer-flow-path {
+  border-top: 1px solid var(--tv-border);
+  padding-top: 13px;
+}
+
+.dialer-flow-path span {
+  color: var(--tv-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dialer-flow-complete {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: 12px;
+  padding: 14px;
+  background: rgb(22 163 74 / 8%);
+  color: #15803d;
+  font-weight: 700;
+}
+
+.dialer-history-card,
+.dialer-task-list article {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--tv-border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.dialer-history-card small,
+.dialer-task-list span {
+  color: var(--tv-text-secondary);
+}
+
+.dialer-history-card p,
+.dialer-task-list p {
+  margin: 0;
+  color: var(--tv-text-secondary);
+  line-height: 1.45;
+}
+
+.dialer-task-list article {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.dialer-task-list article > div {
+  display: grid;
+  gap: 4px;
+}
+
+.dialer-quick-task {
+  border-top: 1px solid var(--tv-border);
+  padding-top: 14px;
+}
+
+.dialer-quick-task h3 {
+  margin: 0;
+}
+
+.dialer-warning {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: 11px;
+  padding: 11px 13px;
+  background: rgb(220 38 38 / 8%);
+  color: #b91c1c;
+}
+
+.dialer-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.dialer-flow-skeleton {
+  min-height: 220px;
+  border-radius: 12px;
+}
+
+@media (max-width: 1180px) {
+  .dialer-contact-picker,
+  .dialer-custom-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .active-call-console,
+  .call-control-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dialer-transfer-control {
+    flex-direction: column;
+  }
+}
+
 /* Project control center */
 .project-workspace {
   display: grid;

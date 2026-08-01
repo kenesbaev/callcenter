@@ -1,35 +1,60 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime, time, timedelta
+from typing import Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request
-from sqlalchemy import and_, case, or_, select
+from fastapi import APIRouter, Header, Request
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from teamora_api.audit import write_audit
 from teamora_api.call_state import CAPACITY_CALL_STATES, TERMINAL_CALL_STATES
 from teamora_api.customer_service import contacts_for_customers, serialize_customer
 from teamora_api.dependencies import Principal, SessionDep, require_permission
+from teamora_api.dialer_flow_service import (
+    advance_execution,
+    back_execution,
+    complete_execution,
+    ensure_execution_for_call,
+    serialize_execution,
+)
 from teamora_api.enums import TaskEventType, TaskStatus, TaskType
 from teamora_api.errors import ApiError
 from teamora_api.models import (
     Call,
     CallbackTask,
+    CallFlowExecution,
     CallOutcome,
+    CallSummary,
     Customer,
     CustomerContact,
+    DialerCompletionSubmission,
     TenantSettings,
+    TranscriptSegment,
+    User,
 )
 from teamora_api.project_access import accessible_project_ids, resolve_project
-from teamora_api.routers.calls import serialize_call
+from teamora_api.routers.calls import save_call_result_transactional, serialize_call
 from teamora_api.schemas.calls import CallRead
 from teamora_api.schemas.crm import DialerAssignment, DialerLeaseRequest, DialerTaskSummary
+from teamora_api.schemas.dialer import (
+    DialerCompleteAndNextRequest,
+    DialerCompleteAndNextResponse,
+    DialerFlowBackRequest,
+    DialerFlowExecutionRead,
+    DialerFlowStepRequest,
+    DialerHistoryItem,
+    DialerWorkspaceRead,
+)
 from teamora_api.task_service import append_task_event
 
 router = APIRouter(prefix="/dialer", tags=["dialer"])
 LOCK_MINUTES = 15
+DialerSource = Literal["callback", "retry", "new"]
 
 
 async def start_of_project_day(
@@ -99,6 +124,7 @@ async def assignment(
     customer: Customer,
     task: CallbackTask | None,
     user_id: UUID,
+    source: DialerSource | None = None,
 ) -> DialerAssignment:
     if customer.lock_token is None:
         raise ApiError(500, "dialer_lease_missing", "Не удалось создать безопасную блокировку клиента")
@@ -132,9 +158,17 @@ async def assignment(
             assigned_user_id=value.assigned_user_id,
         )
 
+    persisted_source: DialerSource | None = None
+    if customer.dialer_assignment_source == "callback":
+        persisted_source = "callback"
+    elif customer.dialer_assignment_source == "retry":
+        persisted_source = "retry"
+    elif customer.dialer_assignment_source == "new":
+        persisted_source = "new"
+
     return DialerAssignment(
         customer=serialize_customer(customer, grouped[customer.id]),
-        source="callback" if task else "new",
+        source=source or persisted_source or ("callback" if task else "retry"),
         callback_task_id=task.id if task else None,
         task=task_summary(task) if task else None,
         pending_tasks=[task_summary(value) for value in pending_tasks],
@@ -225,6 +259,8 @@ async def renew_assignment(
     principal: Principal,
     customer: Customer,
     now: datetime,
+    *,
+    commit: bool = True,
 ) -> DialerAssignment:
     if customer.lock_token is None:
         customer.lock_token = uuid4()
@@ -237,7 +273,10 @@ async def renew_assignment(
         principal.user_id,
     )
     response = await assignment(session, principal.tenant_id, customer, task, principal.user_id)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return response
 
 
@@ -283,6 +322,95 @@ async def assigned_customer_history(
     return [serialize_call(call) for call in calls]
 
 
+async def detailed_history(
+    session: SessionDep,
+    *,
+    tenant_id: UUID,
+    customer_id: UUID,
+) -> list[DialerHistoryItem]:
+    rows = list(
+        (
+            await session.execute(
+                select(Call, CallOutcome, User, CallSummary)
+                .outerjoin(
+                    CallOutcome,
+                    and_(CallOutcome.tenant_id == Call.tenant_id, CallOutcome.call_id == Call.id),
+                )
+                .outerjoin(User, User.id == Call.operator_user_id)
+                .outerjoin(
+                    CallSummary,
+                    and_(CallSummary.tenant_id == Call.tenant_id, CallSummary.call_id == Call.id),
+                )
+                .where(Call.tenant_id == tenant_id, Call.customer_id == customer_id)
+                .order_by(Call.created_at.desc())
+                .limit(20)
+            )
+        ).all()
+    )
+    call_ids = [row[0].id for row in rows]
+    transcript_rows = (
+        list(
+            await session.scalars(
+                select(TranscriptSegment)
+                .where(
+                    TranscriptSegment.tenant_id == tenant_id,
+                    TranscriptSegment.call_id.in_(call_ids),
+                )
+                .order_by(TranscriptSegment.call_id, TranscriptSegment.sequence)
+            )
+        )
+        if call_ids
+        else []
+    )
+    transcripts: dict[UUID, list[dict[str, object]]] = {}
+    for segment in transcript_rows:
+        transcripts.setdefault(segment.call_id, []).append(
+            {
+                "speaker": segment.speaker.value,
+                "language": segment.language.value,
+                "text": segment.text,
+                "sequence": segment.sequence,
+            }
+        )
+    result: list[DialerHistoryItem] = []
+    for call, outcome, operator, summary in rows:
+        result.append(
+            DialerHistoryItem(
+                call=serialize_call(call),
+                result_code=outcome.code if outcome else None,
+                result_label=outcome.label if outcome else None,
+                result_category=outcome.category.value if outcome else None,
+                comment=str(outcome.details.get("comment", "")) if outcome else "",
+                operator_name=operator.display_name if operator else None,
+                transcript=transcripts.get(call.id, []),
+                summary=summary.summary if summary else None,
+            )
+        )
+    return result
+
+
+@router.get("/history/details", response_model=list[DialerHistoryItem])
+async def assigned_customer_history_details(
+    customer_id: UUID,
+    session: SessionDep,
+    principal: Principal = require_permission("dialer:use"),
+) -> list[DialerHistoryItem]:
+    assigned = await session.scalar(
+        select(Customer.id).where(
+            Customer.tenant_id == principal.tenant_id,
+            Customer.id == customer_id,
+            Customer.locked_by_user_id == principal.user_id,
+        )
+    )
+    if assigned is None:
+        raise ApiError(403, "customer_not_assigned", "Клиент не назначен текущему оператору")
+    return await detailed_history(
+        session,
+        tenant_id=principal.tenant_id,
+        customer_id=customer_id,
+    )
+
+
 @router.post("/next-client", response_model=DialerAssignment | None)
 async def next_client(
     request: Request,
@@ -290,10 +418,29 @@ async def next_client(
     principal: Principal = require_permission("dialer:use"),
     project_id: UUID | None = None,
 ) -> DialerAssignment | None:
+    return await allocate_next_assignment(
+        request=request,
+        session=session,
+        principal=principal,
+        project_id=project_id,
+        commit=True,
+        recover_current=True,
+    )
+
+
+async def allocate_next_assignment(
+    *,
+    request: Request,
+    session: SessionDep,
+    principal: Principal,
+    project_id: UUID | None,
+    commit: bool,
+    recover_current: bool,
+) -> DialerAssignment | None:
     now = datetime.now(UTC)
-    current = await assigned_customer(session, principal, now)
+    current = await assigned_customer(session, principal, now) if recover_current else None
     if current is not None:
-        return await renew_assignment(session, principal, current, now)
+        return await renew_assignment(session, principal, current, now, commit=commit)
 
     project = await resolve_project(session, principal, project_id)
     available_lock = or_(Customer.locked_until.is_(None), Customer.locked_until <= now)
@@ -355,6 +502,7 @@ async def next_client(
         )
     ).one_or_none()
     task: CallbackTask | None = None
+    source: DialerSource = "callback"
     if callback_row:
         customer, task = callback_row
         task_was_pending = task.status == TaskStatus.PENDING
@@ -402,6 +550,7 @@ async def next_client(
             .with_for_update(skip_locked=True)
             .limit(1)
         )
+        source = "retry" if customer is not None and customer.status == "assigned" else "new"
     if customer is None:
         return None
 
@@ -409,6 +558,7 @@ async def next_client(
     customer.locked_by_user_id = principal.user_id
     customer.locked_until = now + timedelta(minutes=LOCK_MINUTES)
     customer.lock_token = uuid4()
+    customer.dialer_assignment_source = source
     await write_audit(
         session,
         tenant_id=principal.tenant_id,
@@ -418,11 +568,254 @@ async def next_client(
         resource_id=customer.id,
         correlation_id=request.state.correlation_id,
         safe_metadata={
-            "source": "callback" if task else "new",
+            "source": source,
             "project_id": str(project.id),
         },
     )
-    response = await assignment(session, principal.tenant_id, customer, task, principal.user_id)
+    response = await assignment(
+        session,
+        principal.tenant_id,
+        customer,
+        task,
+        principal.user_id,
+        source=source,
+    )
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+    return response
+
+
+async def operator_call(
+    session: SessionDep,
+    principal: Principal,
+    call_id: UUID,
+    *,
+    for_update: bool = False,
+) -> Call:
+    statement = select(Call).where(
+        Call.tenant_id == principal.tenant_id,
+        Call.id == call_id,
+        Call.operator_user_id == principal.user_id,
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    call = await session.scalar(statement)
+    if call is None:
+        raise ApiError(404, "call_not_found", "Звонок не найден")
+    await resolve_project(session, principal, call.project_id, active_only=False)
+    return call
+
+
+@router.get("/flow/{call_id}", response_model=DialerFlowExecutionRead | None)
+async def get_flow_execution(
+    call_id: UUID,
+    session: SessionDep,
+    principal: Principal = require_permission("dialer:use"),
+) -> DialerFlowExecutionRead | None:
+    call = await operator_call(session, principal, call_id, for_update=True)
+    execution = await ensure_execution_for_call(session, principal, call)
+    if execution is None:
+        return None
+    response = await serialize_execution(session, execution)
+    await session.commit()
+    return response
+
+
+@router.post("/flow/{call_id}/steps", response_model=DialerFlowExecutionRead)
+async def step_flow_execution(
+    call_id: UUID,
+    payload: DialerFlowStepRequest,
+    request: Request,
+    session: SessionDep,
+    principal: Principal = require_permission("dialer:use"),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
+) -> DialerFlowExecutionRead:
+    call = await operator_call(session, principal, call_id, for_update=True)
+    execution = await advance_execution(
+        session,
+        principal=principal,
+        call=call,
+        payload=payload,
+        idempotency_key=idempotency_key,
+        correlation_id=request.state.correlation_id,
+    )
+    response = await serialize_execution(session, execution)
+    await session.commit()
+    return response
+
+
+@router.post("/flow/{call_id}/back", response_model=DialerFlowExecutionRead)
+async def return_flow_execution(
+    call_id: UUID,
+    payload: DialerFlowBackRequest,
+    session: SessionDep,
+    principal: Principal = require_permission("dialer:use"),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
+) -> DialerFlowExecutionRead:
+    call = await operator_call(session, principal, call_id, for_update=True)
+    execution = await back_execution(
+        session,
+        principal=principal,
+        call=call,
+        expected_state_version=payload.expected_state_version,
+        idempotency_key=idempotency_key,
+    )
+    response = await serialize_execution(session, execution)
+    await session.commit()
+    return response
+
+
+@router.get("/workspace", response_model=DialerWorkspaceRead | None)
+async def current_workspace(
+    session: SessionDep,
+    principal: Principal = require_permission("dialer:use"),
+) -> DialerWorkspaceRead | None:
+    now = datetime.now(UTC)
+    customer = await assigned_customer(session, principal, now)
+    if customer is None:
+        return None
+    current_assignment = await renew_assignment(session, principal, customer, now, commit=False)
+    call = await session.scalar(
+        select(Call)
+        .outerjoin(
+            CallOutcome,
+            and_(CallOutcome.tenant_id == Call.tenant_id, CallOutcome.call_id == Call.id),
+        )
+        .where(
+            Call.tenant_id == principal.tenant_id,
+            Call.customer_id == customer.id,
+            Call.operator_user_id == principal.user_id,
+            or_(
+                Call.status.in_(CAPACITY_CALL_STATES),
+                and_(Call.status.in_(TERMINAL_CALL_STATES), CallOutcome.id.is_(None)),
+            ),
+        )
+        .order_by(Call.created_at.desc())
+        .limit(1)
+    )
+    flow = None
+    if call is not None:
+        execution = await ensure_execution_for_call(session, principal, call)
+        flow = await serialize_execution(session, execution) if execution is not None else None
+    history = await detailed_history(
+        session,
+        tenant_id=principal.tenant_id,
+        customer_id=customer.id,
+    )
+    response = DialerWorkspaceRead(
+        assignment=current_assignment,
+        call=serialize_call(call) if call else None,
+        flow=flow,
+        history=history,
+    )
+    await session.commit()
+    return response
+
+
+def completion_fingerprint(payload: DialerCompleteAndNextRequest) -> str:
+    encoded = json.dumps(
+        payload.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@router.post("/complete-and-next", response_model=DialerCompleteAndNextResponse)
+async def complete_and_next(
+    payload: DialerCompleteAndNextRequest,
+    request: Request,
+    session: SessionDep,
+    principal: Principal = require_permission("dialer:use"),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
+) -> DialerCompleteAndNextResponse:
+    fingerprint = completion_fingerprint(payload)
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(
+                func.hashtextextended(f"dialer-complete:{principal.tenant_id}:{idempotency_key}", 0)
+            )
+        )
+    )
+    replay = await session.scalar(
+        select(DialerCompletionSubmission).where(
+            DialerCompletionSubmission.tenant_id == principal.tenant_id,
+            DialerCompletionSubmission.idempotency_key == idempotency_key,
+        )
+    )
+    if replay is not None:
+        if replay.request_fingerprint != fingerprint:
+            raise ApiError(409, "idempotency_key_reused", "Idempotency-Key уже использован другим запросом")
+        stored = DialerCompleteAndNextResponse.model_validate(replay.response_payload)
+        return stored.model_copy(update={"replayed": True})
+
+    call = await operator_call(session, principal, payload.call_id, for_update=True)
+    if call.project_id != (payload.project_id or call.project_id) or call.customer_id != payload.customer_id:
+        raise ApiError(409, "dialer_assignment_conflict", "Звонок не соответствует текущему назначению")
+    if call.status not in TERMINAL_CALL_STATES:
+        raise ApiError(409, "call_terminal_required", "Сначала завершите звонок")
+    if call.state_version != payload.expected_state_version:
+        raise ApiError(409, "call_state_version_conflict", "Состояние звонка уже изменилось")
+    customer = await session.scalar(
+        select(Customer)
+        .where(
+            Customer.tenant_id == principal.tenant_id,
+            Customer.project_id == call.project_id,
+            Customer.id == payload.customer_id,
+            Customer.locked_by_user_id == principal.user_id,
+            Customer.lock_token == payload.lock_token,
+        )
+        .with_for_update()
+    )
+    if customer is None:
+        raise ApiError(409, "dialer_lease_lost", "Назначение клиента уже недействительно")
+    execution = await session.scalar(
+        select(CallFlowExecution)
+        .where(
+            CallFlowExecution.tenant_id == principal.tenant_id,
+            CallFlowExecution.call_id == call.id,
+            CallFlowExecution.operator_user_id == principal.user_id,
+        )
+        .with_for_update()
+    )
+    if execution is not None:
+        complete_execution(execution, expected_version=payload.flow_execution_state_version)
+    elif payload.flow_execution_state_version is not None:
+        raise ApiError(409, "call_flow_execution_missing", "Выполнение сценария не найдено")
+
+    result = await save_call_result_transactional(
+        call_id=call.id,
+        payload=payload.result,
+        request=request,
+        session=session,
+        principal=principal,
+        idempotency_key=None,
+        commit=False,
+    )
+    next_assignment = await allocate_next_assignment(
+        request=request,
+        session=session,
+        principal=principal,
+        project_id=call.project_id,
+        commit=False,
+        recover_current=False,
+    )
+    response = DialerCompleteAndNextResponse(
+        result=result,
+        next_assignment=next_assignment,
+        queue_complete=next_assignment is None,
+    )
+    session.add(
+        DialerCompletionSubmission(
+            tenant_id=principal.tenant_id,
+            call_id=call.id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            response_payload=response.model_dump(mode="json"),
+        )
+    )
     await session.commit()
     return response
 
@@ -500,6 +893,7 @@ async def release_customer(
     customer.locked_by_user_id = None
     customer.locked_until = None
     customer.lock_token = None
+    customer.dialer_assignment_source = None
     await write_audit(
         session,
         tenant_id=principal.tenant_id,

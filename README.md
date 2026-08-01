@@ -33,6 +33,11 @@ owned by their operator; stale new-customer leases can be reclaimed. Tenant, pro
 and operator concurrent-call limits are checked transactionally before a Mock call is
 created. See [the migration plan](docs/MIGRATION_PLAN.md) for completed and pending work.
 
+The extended operator workspace keeps the customer card, published script runtime, call history,
+tasks and state-machine controls in `/app/dialer`. `POST /api/v1/dialer/complete-and-next` saves the
+outcome and allocates the next customer atomically with an idempotent replay response. Runtime and
+recovery details are documented in [the Dialer workspace guide](docs/dialer-workspace.md).
+
 The standalone web image compiles Next.js rewrites during the Docker build. Its
 Dockerfile therefore defaults `API_INTERNAL_URL` to the Compose service address
 `http://api:8000`; deployments with a different internal API hostname must override

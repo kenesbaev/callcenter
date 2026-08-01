@@ -250,14 +250,17 @@ async def start_call(
     capacity_call = await reserve_call_capacity(session, principal, customer)
     if capacity_call is not None:
         return serialize_call(capacity_call)
+    phone_filters = [
+        CustomerContact.tenant_id == principal.tenant_id,
+        CustomerContact.project_id == customer.project_id,
+        CustomerContact.customer_id == customer.id,
+        CustomerContact.kind == "phone",
+    ]
+    if payload.customer_contact_id is not None:
+        phone_filters.append(CustomerContact.id == payload.customer_contact_id)
     phone = await session.scalar(
         select(CustomerContact)
-        .where(
-            CustomerContact.tenant_id == principal.tenant_id,
-            CustomerContact.project_id == customer.project_id,
-            CustomerContact.customer_id == customer.id,
-            CustomerContact.kind == "phone",
-        )
+        .where(*phone_filters)
         .order_by(CustomerContact.is_primary.desc(), CustomerContact.created_at)
         .limit(1)
     )
@@ -732,6 +735,27 @@ async def save_call_result(
     principal: Principal = require_permission("dialer:use"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
 ) -> CallResultResponse:
+    return await save_call_result_transactional(
+        call_id=call_id,
+        payload=payload,
+        request=request,
+        session=session,
+        principal=principal,
+        idempotency_key=idempotency_key,
+        commit=True,
+    )
+
+
+async def save_call_result_transactional(
+    *,
+    call_id: UUID,
+    payload: CallResultRequest,
+    request: Request,
+    session: SessionDep,
+    principal: Principal,
+    idempotency_key: str | None,
+    commit: bool,
+) -> CallResultResponse:
     now = datetime.now(UTC)
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
     if call.status == CallStatus.QUEUED:
@@ -1061,6 +1085,7 @@ async def save_call_result(
     customer.locked_by_user_id = None
     customer.locked_until = None
     customer.lock_token = None
+    customer.dialer_assignment_source = None
     customer.last_call_at = call.ended_at or now
     await append_call_event(
         session,
@@ -1107,7 +1132,10 @@ async def save_call_result(
                 response_payload=response.model_dump(mode="json"),
             )
         )
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return response
 
 

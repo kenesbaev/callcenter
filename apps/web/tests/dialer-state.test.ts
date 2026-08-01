@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { callElapsedSeconds, newestCall } from "@/components/dialer-view";
+import {
+  callElapsedSeconds,
+  newestCall,
+  shouldHandleDialerShortcut,
+} from "@/components/dialer-view";
 import type { Call } from "@/lib/types";
 
 function call(overrides: Partial<Call> = {}): Call {
@@ -77,5 +81,25 @@ describe("dialer polling state", () => {
     const current = call({ status: "ringing", state_version: 2 });
     const incoming = call({ status: "active", state_version: 3 });
     expect(newestCall(current, incoming)).toBe(incoming);
+  });
+});
+
+describe("dialer keyboard shortcuts", () => {
+  it("does not trigger while the operator types or a modal is open", () => {
+    const input = document.createElement("input");
+    const textarea = document.createElement("textarea");
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const dialogChild = document.createElement("span");
+    dialog.append(dialogChild);
+
+    expect(shouldHandleDialerShortcut(input)).toBe(false);
+    expect(shouldHandleDialerShortcut(textarea)).toBe(false);
+    expect(shouldHandleDialerShortcut(dialogChild)).toBe(false);
+  });
+
+  it("allows shortcuts from the neutral workspace", () => {
+    const workspace = document.createElement("div");
+    expect(shouldHandleDialerShortcut(workspace)).toBe(true);
   });
 });

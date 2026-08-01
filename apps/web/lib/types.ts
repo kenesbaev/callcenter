@@ -346,11 +346,92 @@ export type CallbackTask = {
 
 export type DialerAssignment = {
   customer: Customer;
-  source: "callback" | "new";
+  source: "callback" | "retry" | "new";
   callback_task_id: string | null;
   task: DialerTaskSummary | null;
   pending_tasks: DialerTaskSummary[];
   lock_token: string;
+};
+
+export type DialerFlowStep = {
+  id: string;
+  sequence: number;
+  node_id: string;
+  system_key: string;
+  node_type: string;
+  language_code: string;
+  text_snapshot: string;
+  hint_snapshot: string;
+  selected_answer_key: string | null;
+  selected_answer_label: string | null;
+  input_value: unknown;
+  next_node_id: string | null;
+  action_status: string | null;
+  occurred_at: string;
+};
+
+export type DialerFlowExecution = {
+  id: string;
+  call_id: string;
+  call_flow_version_id: string;
+  current_node: CallFlowNode | null;
+  status: "active" | "completed" | "cancelled";
+  language_code: string;
+  language_codes: string[];
+  state_version: number;
+  values: Record<string, unknown>;
+  steps: DialerFlowStep[];
+  started_at: string;
+  completed_at: string | null;
+};
+
+export type DialerHistoryItem = {
+  call: Call;
+  result_code: string | null;
+  result_label: string | null;
+  result_category: CallResultCategory | null;
+  comment: string;
+  operator_name: string | null;
+  transcript: Array<{
+    speaker: string;
+    language: string;
+    text: string;
+    sequence: number;
+  }>;
+  summary: string | null;
+};
+
+export type DialerCompleteAndNextResponse = {
+  result: CallResultResponse;
+  next_assignment: DialerAssignment | null;
+  queue_complete: boolean;
+  replayed: boolean;
+};
+
+export type CallState = {
+  call_id: string;
+  status: CallStatus;
+  state_version: number;
+  direction: "inbound" | "outbound";
+  provider: string;
+  provider_call_id: string | null;
+  state: CallStatus;
+  recording_state: string;
+  allowed_actions: string[];
+  transfer_state: CallStatus | null;
+  started_at: string | null;
+  ringing_at: string | null;
+  answered_at: string | null;
+  held_at: string | null;
+  ended_at: string | null;
+  hangup_cause: Call["hangup_cause"];
+  terminal: boolean;
+  last_event: {
+    event_type: string;
+    sequence: number;
+    occurred_at: string;
+  } | null;
+  updated_at: string;
 };
 
 export type TaskType = "callback" | "follow_up" | "manual" | "system";

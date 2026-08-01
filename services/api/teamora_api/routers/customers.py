@@ -534,6 +534,7 @@ async def archive_customer(
         customer.locked_by_user_id = None
         customer.locked_until = None
         customer.lock_token = None
+        customer.dialer_assignment_source = None
         await write_audit(
             session,
             tenant_id=principal.tenant_id,

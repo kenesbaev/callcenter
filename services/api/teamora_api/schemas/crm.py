@@ -414,7 +414,7 @@ class DialerTaskSummary(BaseModel):
 
 class DialerAssignment(BaseModel):
     customer: CustomerRead
-    source: Literal["callback", "new"]
+    source: Literal["callback", "retry", "new"]
     callback_task_id: UUID | None = None
     task: DialerTaskSummary | None = None
     pending_tasks: list[DialerTaskSummary] = Field(default_factory=list)

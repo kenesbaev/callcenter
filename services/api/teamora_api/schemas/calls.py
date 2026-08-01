@@ -88,6 +88,7 @@ class CallDetail(CallRead):
 
 class CallStartRequest(BaseModel):
     customer_id: UUID
+    customer_contact_id: UUID | None = None
     lock_token: UUID
     callback_task_id: UUID | None = None
     from_number: str = Field(default="MOCK", min_length=2, max_length=32)

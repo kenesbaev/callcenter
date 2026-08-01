@@ -686,6 +686,10 @@ class Customer(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             "archived_at",
         ),
         Index("ix_customers_tenant_assigned_user", "tenant_id", "assigned_user_id"),
+        CheckConstraint(
+            "dialer_assignment_source IS NULL OR dialer_assignment_source IN ('callback', 'retry', 'new')",
+            name="dialer_assignment_source_valid",
+        ),
     )
 
     project_id: Mapped[UUID] = mapped_column(index=True)
@@ -711,6 +715,7 @@ class Customer(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     )
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     lock_token: Mapped[UUID | None] = mapped_column(index=True)
+    dialer_assignment_source: Mapped[str | None] = mapped_column(String(16))
     last_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -906,6 +911,7 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_calls_tenant_call_id"),
         CheckConstraint(
             "status IN ('queued', 'initiated', 'ringing', 'active', 'on_hold', "
             "'transfer_requested', 'transferring', 'transferred', 'completed', "
@@ -947,6 +953,114 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
         Index("ix_calls_tenant_started", "tenant_id", "started_at"),
         Index("ix_calls_project_status", "project_id", "status"),
     )
+
+
+class CallFlowExecution(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "call_flow_executions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_call_flow_executions_tenant_call",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "call_flow_version_id"],
+            [
+                "call_flow_versions.tenant_id",
+                "call_flow_versions.project_id",
+                "call_flow_versions.id",
+            ],
+            name="fk_call_flow_executions_tenant_project_version",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "call_id", name="uq_call_flow_executions_tenant_call"),
+        UniqueConstraint("tenant_id", "id", name="uq_call_flow_executions_tenant_id"),
+        CheckConstraint(
+            "status IN ('active', 'completed', 'cancelled')",
+            name="status_valid",
+        ),
+        CheckConstraint("state_version >= 1", name="state_version_positive"),
+        Index(
+            "ix_call_flow_executions_operator_status_updated",
+            "tenant_id",
+            "operator_user_id",
+            "status",
+            "updated_at",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID] = mapped_column(index=True)
+    customer_id: Mapped[UUID] = mapped_column(ForeignKey("customers.id", ondelete="RESTRICT"), index=True)
+    operator_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    call_flow_version_id: Mapped[UUID] = mapped_column(index=True)
+    current_node_id: Mapped[UUID | None] = mapped_column(index=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", nullable=False, index=True)
+    language_code: Mapped[str] = mapped_column(String(32), default="ru", nullable=False)
+    state_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    values: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CallFlowExecutionStep(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "call_flow_execution_steps"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "execution_id"],
+            ["call_flow_executions.tenant_id", "call_flow_executions.id"],
+            name="fk_call_flow_execution_steps_tenant_execution",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("execution_id", "sequence", name="uq_call_flow_execution_steps_sequence"),
+        UniqueConstraint(
+            "tenant_id",
+            "execution_id",
+            "idempotency_key",
+            name="uq_call_flow_execution_steps_idempotency",
+        ),
+        Index("ix_call_flow_execution_steps_execution_created", "execution_id", "created_at"),
+    )
+
+    execution_id: Mapped[UUID] = mapped_column(index=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    node_id: Mapped[UUID] = mapped_column(index=True)
+    system_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    node_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    language_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    text_snapshot: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    hint_snapshot: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    selected_answer_key: Mapped[str | None] = mapped_column(String(80))
+    selected_answer_label: Mapped[str | None] = mapped_column(String(240))
+    input_value: Mapped[object | None] = mapped_column(JSON)
+    next_node_id: Mapped[UUID | None] = mapped_column(index=True)
+    action_status: Mapped[str | None] = mapped_column(String(24))
+    actor_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DialerCompletionSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "dialer_completion_submissions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_dialer_completion_submissions_tenant_call",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_dialer_completion_submissions_tenant_key",
+        ),
+    )
+
+    call_id: Mapped[UUID] = mapped_column(index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
 class CallParticipant(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
