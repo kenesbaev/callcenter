@@ -37,6 +37,7 @@ from teamora_api.security import (
     set_auth_cookies,
     verify_password,
 )
+from teamora_api.team_service import end_all_presence, ensure_operator_profile, touch_presence
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -62,14 +63,24 @@ async def issue_session(
     )
     refresh = new_refresh_token(tenant.id)
     csrf = new_csrf_token()
+    now = datetime.now(UTC)
     session.add(
         RefreshToken(
             tenant_id=tenant.id,
             user_id=user.id,
             membership_id=membership.id,
             token_hash=hash_token(refresh),
-            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
+            expires_at=now + timedelta(days=settings.refresh_token_ttl_days),
         )
+    )
+    user.last_login_at = now
+    membership.activated_at = membership.activated_at or now
+    await ensure_operator_profile(session, membership, now=now)
+    await touch_presence(
+        session,
+        membership,
+        session_key=f"auth-{hash_token(refresh)[:48]}",
+        now=now,
     )
     set_auth_cookies(response, access=access, refresh=refresh, csrf=csrf, settings=settings)
     return csrf
@@ -295,6 +306,11 @@ async def logout(request: Request, response: Response, session: SessionDep) -> N
         )
         if token is not None:
             token.revoked_at = datetime.now(UTC)
+            await end_all_presence(
+                session,
+                tenant_id=tenant_id,
+                membership_id=token.membership_id,
+            )
             await session.commit()
     clear_auth_cookies(response, get_settings())
 

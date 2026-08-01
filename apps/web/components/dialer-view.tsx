@@ -45,7 +45,7 @@ import type {
   Page,
   Project,
   Task,
-  TaskOptions,
+  TransferCandidate,
 } from "@/lib/types";
 
 const resultSchema = z.object({
@@ -198,8 +198,7 @@ export function DialerView() {
     "script",
   );
   const [flowValue, setFlowValue] = useState("");
-  const [transferDestination, setTransferDestination] =
-    useState("operator-queue");
+  const [transferDestination, setTransferDestination] = useState("");
   const [newTaskType, setNewTaskType] = useState<"manual" | "callback">(
     "manual",
   );
@@ -264,10 +263,12 @@ export function DialerView() {
       ),
     enabled: Boolean(assignment.data?.customer.id),
   });
-  const taskOptions = useQuery({
-    queryKey: ["tasks", "options", selectedProjectId],
+  const transferCandidates = useQuery({
+    queryKey: ["team", "transfer-candidates", selectedProjectId],
     queryFn: () =>
-      apiRequest<TaskOptions>(`/tasks/options?project_id=${selectedProjectId}`),
+      apiRequest<TransferCandidate[]>(
+        `/team/transfer-candidates?project_id=${selectedProjectId}`,
+      ),
     enabled: Boolean(selectedProjectId),
   });
   const resultForm = useForm<ResultForm>({
@@ -404,6 +405,7 @@ export function DialerView() {
       }),
     onSuccess: (value) => {
       queryClient.setQueryData(["dialer", "active-call"], value);
+      void queryClient.invalidateQueries({ queryKey: ["team", "presence"] });
       setMessage("");
     },
     onError: showError,
@@ -414,11 +416,13 @@ export function DialerView() {
         method: "POST",
         headers: commandHeaders(call, "dialer-answer"),
       }),
-    onSuccess: (value) =>
+    onSuccess: (value) => {
       queryClient.setQueryData<Call | null>(
         ["dialer", "active-call"],
         (current) => newestCall(current, value),
-      ),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["team", "presence"] });
+    },
     onError: showError,
   });
   const hangupCall = useMutation({
@@ -427,11 +431,13 @@ export function DialerView() {
         method: "POST",
         headers: commandHeaders(call, "dialer-hangup"),
       }),
-    onSuccess: (value) =>
+    onSuccess: (value) => {
       queryClient.setQueryData<Call | null>(
         ["dialer", "active-call"],
         (current) => newestCall(current, value),
-      ),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["team", "presence"] });
+    },
     onError: showError,
   });
   const holdCall = useMutation({
@@ -440,11 +446,13 @@ export function DialerView() {
         method: "POST",
         headers: commandHeaders(call, "dialer-hold"),
       }),
-    onSuccess: (value) =>
+    onSuccess: (value) => {
       queryClient.setQueryData<Call | null>(
         ["dialer", "active-call"],
         (current) => newestCall(current, value),
-      ),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["team", "presence"] });
+    },
     onError: showError,
   });
   const resumeCall = useMutation({
@@ -453,11 +461,13 @@ export function DialerView() {
         method: "POST",
         headers: commandHeaders(call, "dialer-resume"),
       }),
-    onSuccess: (value) =>
+    onSuccess: (value) => {
       queryClient.setQueryData<Call | null>(
         ["dialer", "active-call"],
         (current) => newestCall(current, value),
-      ),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["team", "presence"] });
+    },
     onError: showError,
   });
   const transferCall = useMutation({
@@ -475,6 +485,7 @@ export function DialerView() {
         ["dialer", "active-call"],
         (current) => newestCall(current, value),
       );
+      void queryClient.invalidateQueries({ queryKey: ["team", "presence"] });
       setMessage("Звонок передан в очередь операторов Mock-провайдера.");
     },
     onError: showError,
@@ -497,6 +508,7 @@ export function DialerView() {
         queryClient.invalidateQueries({ queryKey: ["tasks"] }),
         queryClient.invalidateQueries({ queryKey: ["customers"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["team", "presence"] }),
       ]);
     },
     onError: showError,
@@ -541,6 +553,7 @@ export function DialerView() {
         queryClient.invalidateQueries({ queryKey: ["tasks"] }),
         queryClient.invalidateQueries({ queryKey: ["customers"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["team", "presence"] }),
       ]);
     },
     onError: showError,
@@ -1100,20 +1113,24 @@ export function DialerView() {
                           }
                           value={transferDestination}
                         >
-                          <option value="operator-queue">
-                            Очередь операторов
+                          <option value="">
+                            Выберите доступного оператора
                           </option>
-                          {taskOptions.data?.operators.map((operator) => (
+                          {transferCandidates.data?.map((operator) => (
                             <option
                               key={operator.user_id}
                               value={operator.user_id}
                             >
                               {operator.display_name}
+                              {operator.extension
+                                ? ` · ${operator.extension}`
+                                : ""}
+                              {` · Доступен`}
                             </option>
                           ))}
                         </select>
                         <Button
-                          disabled={isBusy}
+                          disabled={isBusy || !transferDestination}
                           onClick={() => transferCall.mutate()}
                           variant="secondary"
                         >

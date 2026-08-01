@@ -36,6 +36,7 @@ test:
 	py -3.12 scripts/run_telephony_migration_test.py
 	py -3.12 scripts/run_call_state_migration_test.py
 	py -3.12 scripts/run_dialer_migration_test.py
+	py -3.12 scripts/run_team_migration_test.py
 	cd services/worker && py -3.12 -m pytest
 	py -3.12 scripts/run_e2e_tests.py
 

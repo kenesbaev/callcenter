@@ -37,6 +37,8 @@ The extended operator workspace keeps the customer card, published script runtim
 tasks and state-machine controls in `/app/dialer`. `POST /api/v1/dialer/complete-and-next` saves the
 outcome and allocates the next customer atomically with an idempotent replay response. Runtime and
 recovery details are documented in [the Dialer workspace guide](docs/dialer-workspace.md).
+Team roles, invitations and presence are documented in
+[the team access guide](docs/team-access.md).
 
 The standalone web image compiles Next.js rewrites during the Docker build. Its
 Dockerfile therefore defaults `API_INTERNAL_URL` to the Compose service address

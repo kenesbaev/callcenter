@@ -689,10 +689,70 @@ export type TeamMember = {
   user_id: string;
   display_name: string;
   email: string;
+  phone: string | null;
+  job_title: string | null;
   role: Role;
   is_active: boolean;
-  operator_status: "offline" | "available" | "busy" | "wrap_up" | null;
   extension: string | null;
+  interface_language: string;
+  timezone: string | null;
+  invited_at: string | null;
+  activated_at: string | null;
+  last_login_at: string | null;
+  last_heartbeat_at: string | null;
+  blocked_at: string | null;
+  blocked_reason: string | null;
+  manual_status: "available" | "away" | "on_break" | "offline";
+  effective_status:
+    "available" | "away" | "on_break" | "offline" | "busy" | "on_hold";
+  is_transfer_available: boolean;
+  current_call_id: string | null;
+  projects: Array<{ id: string; name: string }>;
+  state_version: number;
+};
+
+export type TeamInvitation = {
+  id: string;
+  email: string;
+  role: Role;
+  status: "pending" | "accepted" | "cancelled" | "expired";
+  project_ids: string[];
+  expires_at: string;
+  issued_at: string;
+  accepted_at: string | null;
+  cancelled_at: string | null;
+  state_version: number;
+  created_at: string;
+  acceptance_url: string | null;
+  acceptance_token: string | null;
+};
+
+export type OperatorPresence = {
+  manual_status: "available" | "away" | "on_break" | "offline";
+  effective_status:
+    "available" | "away" | "on_break" | "offline" | "busy" | "on_hold";
+  last_heartbeat_at: string | null;
+  heartbeat_ttl_seconds: number;
+  current_call_id: string | null;
+};
+
+export type TransferCandidate = {
+  membership_id: string;
+  user_id: string;
+  display_name: string;
+  extension: string | null;
+  project_id: string;
+  effective_status: "available";
+  is_transfer_available: boolean;
+};
+
+export type TeamAudit = {
+  id: string;
+  actor_user_id: string | null;
+  action: string;
+  reason: string | null;
+  safe_metadata: Record<string, unknown>;
+  created_at: string;
 };
 
 export type Integration = {

@@ -35,6 +35,7 @@ from teamora_api.enums import (
     DeliveryStatus,
     HangupCause,
     IntegrationStatus,
+    InvitationStatus,
     LanguageCode,
     LanguageReadiness,
     OperatorVersionStatus,
@@ -90,6 +91,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -116,11 +118,25 @@ class RolePermission(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 class Membership(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "memberships"
-    __table_args__ = (UniqueConstraint("tenant_id", "user_id"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_memberships_tenant_id_id"),
+        CheckConstraint("state_version >= 1", name="state_version_positive"),
+    )
 
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     role: Mapped[RoleName] = mapped_column(enum_type(RoleName), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(32))
+    job_title: Mapped[str | None] = mapped_column(String(120))
+    interface_language: Mapped[str] = mapped_column(String(32), default="ru", nullable=False)
+    timezone: Mapped[str | None] = mapped_column(String(64))
+    invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    presence_last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    blocked_reason: Mapped[str | None] = mapped_column(String(500))
+    state_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 
 class Project(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -363,12 +379,84 @@ class RefreshToken(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 class Invitation(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "invitations"
 
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_invitations_tenant_id_id"),
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'cancelled', 'expired')",
+            name="status_valid",
+        ),
+        CheckConstraint("state_version >= 1", name="state_version_positive"),
+        ForeignKeyConstraint(
+            ["tenant_id", "invited_by_membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_invitations_tenant_invited_by_membership",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "accepted_membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_invitations_tenant_accepted_membership",
+            ondelete="SET NULL",
+        ),
+        Index(
+            "uq_invitations_active_email",
+            "tenant_id",
+            "email",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     role: Mapped[RoleName] = mapped_column(enum_type(RoleName), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     invited_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    invited_by_membership_id: Mapped[UUID | None] = mapped_column(index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[InvitationStatus] = mapped_column(
+        enum_type(InvitationStatus), default=InvitationStatus.PENDING, nullable=False, index=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    accepted_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    accepted_membership_id: Mapped[UUID | None] = mapped_column(index=True)
+    state_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class InvitationProject(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "invitation_projects"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "invitation_id"],
+            ["invitations.tenant_id", "invitations.id"],
+            name="fk_invitation_projects_tenant_invitation",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_invitation_projects_tenant_project",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "invitation_id", "project_id", name="uq_invitation_projects_scope"),
+    )
+
+    invitation_id: Mapped[UUID] = mapped_column(index=True)
+    project_id: Mapped[UUID] = mapped_column(index=True)
+
+
+class TeamCommandSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "team_command_submissions"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_team_commands_tenant_idempotency_key"),
+    )
+
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[UUID | None] = mapped_column()
+    response_payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class SipTrunk(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -1382,20 +1470,62 @@ class TaskCommandSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class HumanOperator(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "human_operators"
-    __table_args__ = (UniqueConstraint("tenant_id", "membership_id"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_human_operators_tenant_membership",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "membership_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_human_operators_tenant_id_id"),
+    )
 
     membership_id: Mapped[UUID] = mapped_column(ForeignKey("memberships.id", ondelete="CASCADE"))
     extension: Mapped[str | None] = mapped_column(String(32))
     max_concurrent_calls: Mapped[int] = mapped_column(Integer, default=1)
+    is_transfer_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class OperatorStatus(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "operator_statuses"
-    __table_args__ = (UniqueConstraint("tenant_id", "human_operator_id"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "human_operator_id"],
+            ["human_operators.tenant_id", "human_operators.id"],
+            name="fk_operator_statuses_tenant_human_operator",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "human_operator_id"),
+    )
 
     human_operator_id: Mapped[UUID] = mapped_column(ForeignKey("human_operators.id", ondelete="CASCADE"))
     status: Mapped[QueueStatus] = mapped_column(enum_type(QueueStatus), default=QueueStatus.OFFLINE)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class OperatorPresence(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "operator_presences"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_operator_presences_tenant_membership",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "membership_id", "session_key", name="uq_operator_presences_session"),
+        Index(
+            "ix_operator_presences_active_heartbeat",
+            "tenant_id",
+            "membership_id",
+            "heartbeat_at",
+        ),
+    )
+
+    membership_id: Mapped[UUID] = mapped_column(index=True)
+    session_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class OperatorQueue(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

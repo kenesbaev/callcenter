@@ -216,3 +216,146 @@ test("оператор проходит полный Mock Dialer и сохран
     page.getByRole("heading", { name: "Ожидание клиента" }),
   ).toBeVisible();
 });
+
+test("владелец приглашает оператора, а присутствие и блокировка защищают Dialer", async ({
+  page,
+  browser,
+}) => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const slug = `team-${suffix}`;
+  const ownerEmail = `team-owner+${suffix}@example.com`;
+  const operatorEmail = `team-operator+${suffix}@example.com`;
+  const managerEmail = `team-manager+${suffix}@example.com`;
+  const operatorPassword = "SecureOperator123!";
+  const managerPassword = "SecureManager123!";
+  const customerName = `Team Dialer ${suffix}`;
+
+  await page.goto("/register");
+  await page.getByLabel("Название компании").fill(`K-Line Team ${suffix}`);
+  await page.getByLabel("Адрес компании").fill(slug);
+  await page.getByLabel("Ваше имя").fill("Владелец Team E2E");
+  await page.getByLabel("Рабочая почта").fill(ownerEmail);
+  await page.getByLabel("Пароль").fill("SecureOwner123!");
+  await page.getByRole("button", { name: "Создать компанию" }).click();
+
+  await page.getByRole("link", { name: "Клиенты" }).click();
+  await page.getByRole("button", { name: "Новый клиент" }).click();
+  await page.getByLabel("ФИО").fill(customerName);
+  await page.getByLabel("Телефон 1").fill("+998 95 700 10 20");
+  await page.getByRole("button", { name: "Сохранить клиента" }).click();
+  await expect(page.getByText("Клиент создан")).toBeVisible();
+
+  await page.getByRole("link", { name: "Команда" }).click();
+  await page.getByRole("button", { name: /Пригласить сотрудника/ }).click();
+  await page.getByLabel("E-mail приглашения").fill(operatorEmail);
+  await page
+    .getByRole("dialog", { name: "Приглашение сотрудника" })
+    .getByText("Основной проект", { exact: true })
+    .click();
+  await page.getByRole("button", { name: /Создать приглашение/ }).click();
+  const acceptanceUrl = await page
+    .locator(".team-invite-secret code")
+    .textContent();
+  expect(acceptanceUrl).toContain("/accept-invitation");
+  await page
+    .locator(".team-invite-secret")
+    .getByRole("button", { name: "Закрыть" })
+    .click();
+  await expect(page.locator(".team-invite-secret")).toHaveCount(0);
+
+  await page.getByRole("button", { name: /Пригласить сотрудника/ }).click();
+  await page.getByLabel("E-mail приглашения").fill(managerEmail);
+  await page.getByLabel("Роль приглашения").selectOption("tenant_manager");
+  await page.getByRole("button", { name: /Создать приглашение/ }).click();
+  const managerAcceptanceUrl = await page
+    .locator(".team-invite-secret code")
+    .textContent();
+  expect(managerAcceptanceUrl).toContain("/accept-invitation");
+
+  const operatorContext = await browser.newContext();
+  const operatorPage = await operatorContext.newPage();
+  try {
+    await operatorPage.goto(acceptanceUrl!);
+    await operatorPage.getByLabel("Имя сотрудника").fill("Оператор Team E2E");
+    await operatorPage.getByLabel("Пароль").fill(operatorPassword);
+    await operatorPage
+      .getByRole("button", { name: "Принять приглашение" })
+      .click();
+    await expect(operatorPage.getByText("Приглашение принято")).toBeVisible();
+    await operatorPage.getByRole("link", { name: "Перейти ко входу" }).click();
+    await operatorPage.getByLabel("Адрес компании").fill(slug);
+    await operatorPage.getByLabel("Email").fill(operatorEmail);
+    await operatorPage.getByLabel("Пароль").fill(operatorPassword);
+    await operatorPage
+      .getByRole("button", { name: "Войти", exact: true })
+      .click();
+    await expect(operatorPage).toHaveURL(/\/app$/);
+
+    const statusSelect = operatorPage.getByLabel("Рабочий статус");
+    await statusSelect.selectOption("available");
+    await expect(statusSelect).toHaveValue("available");
+    await operatorPage.getByRole("link", { name: "Диалер" }).click();
+    await operatorPage
+      .getByRole("button", { name: "Следующий клиент" })
+      .click();
+    await expect(
+      operatorPage.getByRole("heading", { name: customerName }),
+    ).toBeVisible();
+    await operatorPage.getByRole("button", { name: "Позвонить" }).click();
+    await operatorPage
+      .getByRole("button", { name: "Имитировать ответ" })
+      .click();
+    await expect(
+      operatorPage.getByText("Занят", { exact: true }),
+    ).toBeVisible();
+    await operatorPage
+      .getByRole("button", { name: "Завершить звонок" })
+      .click();
+    await operatorPage.getByText("Успешно", { exact: true }).click();
+    await operatorPage
+      .getByRole("button", { name: /Сохранить и следующий/ })
+      .click();
+    await expect(statusSelect).toBeEnabled();
+    await expect(statusSelect).toHaveValue("available");
+
+    const managerContext = await browser.newContext();
+    const managerPage = await managerContext.newPage();
+    try {
+      await managerPage.goto(managerAcceptanceUrl!);
+      await managerPage.getByLabel("Имя сотрудника").fill("Менеджер Team E2E");
+      await managerPage.getByLabel("Пароль").fill(managerPassword);
+      await managerPage
+        .getByRole("button", { name: "Принять приглашение" })
+        .click();
+      await managerPage.getByRole("link", { name: "Перейти ко входу" }).click();
+      await managerPage.getByLabel("Адрес компании").fill(slug);
+      await managerPage.getByLabel("Email").fill(managerEmail);
+      await managerPage.getByLabel("Пароль").fill(managerPassword);
+      await managerPage
+        .getByRole("button", { name: "Войти", exact: true })
+        .click();
+      await expect(managerPage).toHaveURL(/\/app$/);
+      await managerPage.getByRole("link", { name: "Команда" }).click();
+      await managerPage.getByLabel("Поиск сотрудников").fill(ownerEmail);
+      await managerPage.getByLabel("Открыть Владелец Team E2E").click();
+      await expect(managerPage.getByLabel("Роль сотрудника")).toHaveCount(0);
+      await expect(
+        managerPage.getByRole("button", { name: "Заблокировать" }),
+      ).toHaveCount(0);
+    } finally {
+      await managerContext.close();
+    }
+
+    await page.reload();
+    await page.getByRole("link", { name: "Команда" }).click();
+    await page.getByLabel("Поиск сотрудников").fill(operatorEmail);
+    await page.getByLabel("Открыть Оператор Team E2E").click();
+    await page.getByRole("button", { name: "Заблокировать" }).click();
+    await expect(page.getByText("Сотрудник заблокирован")).toBeVisible();
+
+    await operatorPage.reload();
+    await expect(operatorPage).toHaveURL(/\/login$/);
+  } finally {
+    await operatorContext.close();
+  }
+});

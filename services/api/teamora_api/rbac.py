@@ -70,6 +70,7 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "simulator:use",
             "settings:read",
             "team:read",
+            "team:manage",
             "integrations:read",
         }
     ),
@@ -97,6 +98,7 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "call_flows:read",
             "call_results:read",
             "tasks:read",
+            "team:read",
         }
     ),
     RoleName.BILLING_ADMIN: frozenset({"billing:read", "usage:read"}),

@@ -77,6 +77,7 @@ export default defineConfig({
             DATABASE_URL: databaseURL,
             MIGRATION_DATABASE_URL: migrationDatabaseURL,
             CORS_ORIGINS: `${baseURL},http://localhost:3000,http://localhost:8080`,
+            WEB_ORIGIN: baseURL,
           },
         },
         {

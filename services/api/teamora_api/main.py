@@ -32,6 +32,7 @@ from teamora_api.routers import (
     projects,
     simulator,
     tasks,
+    team,
     tenants,
     webhooks,
 )
@@ -82,6 +83,7 @@ app.include_router(customer_imports.router, prefix=api_v1_prefix)
 app.include_router(customers.router, prefix=api_v1_prefix)
 app.include_router(callbacks.router, prefix=api_v1_prefix)
 app.include_router(tasks.router, prefix=api_v1_prefix)
+app.include_router(team.router, prefix=api_v1_prefix)
 app.include_router(dialer.router, prefix=api_v1_prefix)
 app.include_router(calls.router, prefix=api_v1_prefix)
 app.include_router(simulator.router, prefix=api_v1_prefix)

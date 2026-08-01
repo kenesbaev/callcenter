@@ -51,6 +51,7 @@ from teamora_api.schemas.dialer import (
     DialerWorkspaceRead,
 )
 from teamora_api.task_service import append_task_event
+from teamora_api.team_service import require_available_for_new_assignment
 
 router = APIRouter(prefix="/dialer", tags=["dialer"])
 LOCK_MINUTES = 15
@@ -442,6 +443,7 @@ async def allocate_next_assignment(
     if current is not None:
         return await renew_assignment(session, principal, current, now, commit=commit)
 
+    await require_available_for_new_assignment(session, principal)
     project = await resolve_project(session, principal, project_id)
     available_lock = or_(Customer.locked_until.is_(None), Customer.locked_until <= now)
     day_start = await start_of_project_day(session, principal.tenant_id, project.timezone, now)

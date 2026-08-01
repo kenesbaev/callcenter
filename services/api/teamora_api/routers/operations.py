@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Request
-from sqlalchemy import and_, select
+from sqlalchemy import select
 
 from teamora_api.audit import write_audit
 from teamora_api.call_state import CAPACITY_CALL_STATES
@@ -14,18 +14,13 @@ from teamora_api.enums import IntegrationStatus, LanguageCode
 from teamora_api.errors import ApiError
 from teamora_api.models import (
     Call,
-    HumanOperator,
     Integration,
-    Membership,
-    OperatorStatus,
     TenantSettings,
-    User,
 )
 from teamora_api.routers.calls import serialize_call
 from teamora_api.schemas.calls import CallRead
 from teamora_api.schemas.operations import (
     IntegrationRead,
-    TeamMemberRead,
     TenantSettingsRead,
     TenantSettingsUpdate,
 )
@@ -67,48 +62,6 @@ async def live_calls(
         )
     )
     return [serialize_call(call) for call in calls]
-
-
-@router.get("/team", response_model=list[TeamMemberRead])
-async def team_members(
-    session: SessionDep,
-    principal: Principal = require_permission("team:read"),
-) -> list[TeamMemberRead]:
-    rows = (
-        await session.execute(
-            select(Membership, User, HumanOperator, OperatorStatus)
-            .join(User, User.id == Membership.user_id)
-            .outerjoin(
-                HumanOperator,
-                and_(
-                    HumanOperator.membership_id == Membership.id,
-                    HumanOperator.tenant_id == principal.tenant_id,
-                ),
-            )
-            .outerjoin(
-                OperatorStatus,
-                and_(
-                    OperatorStatus.human_operator_id == HumanOperator.id,
-                    OperatorStatus.tenant_id == principal.tenant_id,
-                ),
-            )
-            .where(Membership.tenant_id == principal.tenant_id)
-            .order_by(Membership.created_at)
-        )
-    ).all()
-    return [
-        TeamMemberRead(
-            membership_id=membership.id,
-            user_id=user.id,
-            display_name=user.display_name,
-            email=user.email,
-            role=membership.role,
-            is_active=membership.is_active,
-            operator_status=status.status if status else None,
-            extension=operator.extension if operator else None,
-        )
-        for membership, user, operator, status in rows
-    ]
 
 
 @router.get("/integrations", response_model=list[IntegrationRead])

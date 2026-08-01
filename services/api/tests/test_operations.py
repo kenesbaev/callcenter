@@ -21,9 +21,9 @@ async def test_team_integrations_and_settings_are_real_tenant_scoped_views(
 
     response = await client.get("/api/v1/team")
     assert response.status_code == 200, response.text
-    assert len(response.json()) == 1
-    assert response.json()[0]["display_name"] == "Test Owner"
-    assert response.json()[0]["role"] == "tenant_owner"
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["display_name"] == "Test Owner"
+    assert response.json()["items"][0]["role"] == "tenant_owner"
 
     response = await client.get("/api/v1/integrations")
     assert response.status_code == 200, response.text

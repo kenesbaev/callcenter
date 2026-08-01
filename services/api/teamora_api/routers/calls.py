@@ -75,6 +75,7 @@ from teamora_api.task_service import (
     sync_customer_callback_state,
     utc_due_at,
 )
+from teamora_api.team_service import require_transfer_candidate
 from teamora_api.telephony.reconciliation import CallReconciliationService
 from teamora_api.telephony.service import TelephonyService
 
@@ -507,6 +508,17 @@ async def transfer_call(
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
     if call.status == CallStatus.TRANSFERRED:
         return serialize_call(call)
+    if payload.destination != "operator-queue":
+        try:
+            destination_user_id = UUID(payload.destination)
+        except ValueError as exc:
+            raise ApiError(422, "transfer_operator_invalid", "Выберите доступного оператора") from exc
+        await require_transfer_candidate(
+            session,
+            tenant_id=principal.tenant_id,
+            project_id=call.project_id,
+            destination_user_id=destination_user_id,
+        )
     await execute_call_command(
         session,
         principal=principal,

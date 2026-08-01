@@ -187,8 +187,18 @@ class IntegrationStatus(StrEnum):
 class QueueStatus(StrEnum):
     OFFLINE = "offline"
     AVAILABLE = "available"
+    AWAY = "away"
+    ON_BREAK = "on_break"
     BUSY = "busy"
+    ON_HOLD = "on_hold"
     WRAP_UP = "wrap_up"
+
+
+class InvitationStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
 
 
 class TransferStatus(StrEnum):

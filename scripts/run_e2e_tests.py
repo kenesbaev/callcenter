@@ -375,6 +375,7 @@ def main() -> int:
             "E2E_MIGRATION_DATABASE_URL": rendered(migration_url),
             "E2E_EXTERNAL_SERVERS": "true",
             "PYTHON_BINARY": sys.executable,
+            "WEB_ORIGIN": "http://localhost:3100",
             "CORS_ORIGINS": (
                 "http://localhost:3100,http://localhost:3000,http://localhost:8080"
             ),
