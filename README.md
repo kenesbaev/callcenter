@@ -212,6 +212,21 @@ The ARI adapter is implemented but still requires live Asterisk/SIP verification
 carrier or OpenAI voice claim is made. The isolated preservation check is
 `py -3.12 scripts/run_telephony_migration_test.py`.
 
+## Canonical call state machine
+
+Every `Call.status` transition now passes through the transactional
+`CallStateService`; routers, Mock, simulator and provider webhooks cannot assign a
+status independently. Optimistic `state_version`, canonical timestamps, normalized
+hangup causes, deterministic out-of-order event handling and a provider reconciliation
+endpoint keep FastAPI as the source of truth. The Dialer uses canonical states, starts
+its timer at `answered_at`, stops at `ended_at`, disables impossible controls and does
+not replace newer state with an older polling response.
+
+See [docs/call-state-machine.md](docs/call-state-machine.md) for the transition table,
+provider event rules, migration mapping and live verification boundary. Run
+`py -3.12 scripts/run_call_state_migration_test.py` for the isolated
+upgrade/downgrade preservation check.
+
 ## Language readiness
 
 | Language           | Status            | Rule                                                                       |

@@ -9,9 +9,10 @@ from sqlalchemy import and_, case, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from teamora_api.audit import write_audit
+from teamora_api.call_state import CAPACITY_CALL_STATES, TERMINAL_CALL_STATES
 from teamora_api.customer_service import contacts_for_customers, serialize_customer
 from teamora_api.dependencies import Principal, SessionDep, require_permission
-from teamora_api.enums import CallStatus, TaskEventType, TaskStatus, TaskType
+from teamora_api.enums import TaskEventType, TaskStatus, TaskType
 from teamora_api.errors import ApiError
 from teamora_api.models import (
     Call,
@@ -59,8 +60,8 @@ def unresolved_operator_call(
             Call.customer_id == customer_id,
             Call.operator_user_id == user_id,
             or_(
-                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
-                and_(Call.status == CallStatus.COMPLETED, CallOutcome.id.is_(None)),
+                Call.status.in_(CAPACITY_CALL_STATES),
+                and_(Call.status.in_(TERMINAL_CALL_STATES), CallOutcome.id.is_(None)),
             ),
         )
         .exists()
@@ -73,7 +74,7 @@ def active_customer_call() -> ColumnElement[bool]:
         .where(
             Call.tenant_id == Customer.tenant_id,
             Call.customer_id == Customer.id,
-            Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+            Call.status.in_(CAPACITY_CALL_STATES),
         )
         .exists()
     )
@@ -195,8 +196,8 @@ async def assigned_customer(
             Call.customer_id == Customer.id,
             Call.operator_user_id == principal.user_id,
             or_(
-                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
-                and_(Call.status == CallStatus.COMPLETED, CallOutcome.id.is_(None)),
+                Call.status.in_(CAPACITY_CALL_STATES),
+                and_(Call.status.in_(TERMINAL_CALL_STATES), CallOutcome.id.is_(None)),
             ),
         )
         .exists()

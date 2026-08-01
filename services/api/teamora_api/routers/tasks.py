@@ -5,8 +5,9 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, Request
-from sqlalchemy import and_, false, func, or_, select
+from sqlalchemy import and_, false, func, or_, select, true
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql import Select
 from sqlalchemy.sql.elements import ColumnElement
 
 from teamora_api.audit import write_audit
@@ -71,16 +72,18 @@ def is_manager(principal: Principal) -> bool:
     return principal.role in MANAGER_ROLES
 
 
-def task_visibility_filter(principal: Principal):  # type: ignore[no-untyped-def]
+def task_visibility_filter(principal: Principal) -> ColumnElement[bool]:
     if principal.role == RoleName.HUMAN_OPERATOR:
         return or_(
             CallbackTask.assigned_user_id == principal.user_id,
             CallbackTask.assigned_user_id.is_(None),
         )
-    return True
+    return true()
 
 
-def task_statement():  # type: ignore[no-untyped-def]
+def task_statement() -> Select[
+    tuple[CallbackTask, Project, Customer, CustomerContact, User, User, TenantSettings]
+]:
     return (
         select(
             CallbackTask,

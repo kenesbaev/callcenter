@@ -333,7 +333,16 @@ def print_log_tail(path: Path, *, lines: int = 40) -> None:
             print(line, flush=True)
 
 
+def configure_console_output() -> None:
+    """Keep diagnostics printable on legacy Windows console code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(errors="backslashreplace")
+
+
 def main() -> int:
+    configure_console_output()
     parser = argparse.ArgumentParser(
         description="Run Playwright against an isolated local PostgreSQL database."
     )

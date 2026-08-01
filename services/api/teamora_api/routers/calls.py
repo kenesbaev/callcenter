@@ -12,10 +12,19 @@ from teamora_api.audit import write_audit
 from teamora_api.call_events import append_call_event
 from teamora_api.call_flow_service import active_version_for_project
 from teamora_api.call_result_service import localized_result_name
+from teamora_api.call_state import (
+    CAPACITY_CALL_STATES,
+    TERMINAL_CALL_STATES,
+    CallStateService,
+    allowed_actions,
+)
 from teamora_api.config import get_settings
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import (
+    CallDirection,
+    CallerType,
     CallStatus,
+    HangupCause,
     TaskEventType,
     TaskPriority,
     TaskSource,
@@ -28,6 +37,7 @@ from teamora_api.errors import ApiError
 from teamora_api.models import (
     Call,
     CallbackTask,
+    CallEvent,
     CallOutcome,
     CallParticipant,
     CallResultDefinition,
@@ -52,7 +62,12 @@ from teamora_api.schemas.calls import (
     TranscriptSegmentRead,
 )
 from teamora_api.schemas.common import Page
-from teamora_api.schemas.telephony import CallStateRead, CallTransferRequest
+from teamora_api.schemas.telephony import (
+    CallLastEventRead,
+    CallReconciliationRead,
+    CallStateRead,
+    CallTransferRequest,
+)
 from teamora_api.task_service import (
     append_task_event,
     cancel_task_record,
@@ -60,6 +75,7 @@ from teamora_api.task_service import (
     sync_customer_callback_state,
     utc_due_at,
 )
+from teamora_api.telephony.reconciliation import CallReconciliationService
 from teamora_api.telephony.service import TelephonyService
 
 router = APIRouter(prefix="/calls", tags=["calls"])
@@ -77,6 +93,7 @@ def serialize_call(call: Call) -> CallRead:
         ai_operator_id=call.ai_operator_id,
         call_flow_version_id=call.call_flow_version_id,
         direction=call.direction,
+        caller_type=call.caller_type,
         provider=call.provider,
         provider_call_id=call.external_call_id,
         provider_state=call.provider_state,
@@ -84,21 +101,29 @@ def serialize_call(call: Call) -> CallRead:
         from_number=call.from_number,
         to_number=call.to_number,
         started_at=call.started_at,
+        ringing_at=call.ringing_at,
         answered_at=call.answered_at,
+        held_at=call.held_at,
         ended_at=call.ended_at,
         duration_seconds=call.duration_seconds,
         transfer_reason=call.transfer_reason,
+        hangup_cause=call.hangup_cause,
+        raw_provider_cause=call.raw_provider_cause,
+        last_provider_event_at=call.last_provider_event_at,
+        state_version=call.state_version,
         is_demo=call.is_demo,
     )
 
 
 async def controlled_call(session: SessionDep, tenant_id: UUID, user_id: UUID, call_id: UUID) -> Call:
     call = await session.scalar(
-        select(Call).where(
+        select(Call)
+        .where(
             Call.tenant_id == tenant_id,
             Call.id == call_id,
             Call.operator_user_id == user_id,
         )
+        .with_for_update()
     )
     if call is None:
         raise ApiError(404, "call_not_found", "Звонок не найден")
@@ -123,7 +148,7 @@ async def reserve_call_capacity(
         select(Call).where(
             Call.tenant_id == principal.tenant_id,
             Call.operator_user_id == principal.user_id,
-            Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+            Call.status.in_(CAPACITY_CALL_STATES),
         )
     )
     if existing is not None:
@@ -137,7 +162,7 @@ async def reserve_call_capacity(
             .select_from(Call)
             .where(
                 Call.tenant_id == principal.tenant_id,
-                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+                Call.status.in_(CAPACITY_CALL_STATES),
             )
         )
         or 0
@@ -157,7 +182,7 @@ async def reserve_call_capacity(
             .where(
                 Call.tenant_id == principal.tenant_id,
                 Call.project_id == project.id,
-                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+                Call.status.in_(CAPACITY_CALL_STATES),
             )
         )
         or 0
@@ -179,7 +204,7 @@ async def reserve_call_capacity(
             .where(
                 Call.tenant_id == principal.tenant_id,
                 Call.operator_user_id == principal.user_id,
-                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+                Call.status.in_(CAPACITY_CALL_STATES),
             )
         )
         or 0
@@ -201,7 +226,7 @@ async def start_call(
         select(Call).where(
             Call.tenant_id == principal.tenant_id,
             Call.operator_user_id == principal.user_id,
-            Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
+            Call.status.in_(CAPACITY_CALL_STATES),
         )
     )
     if existing:
@@ -274,12 +299,12 @@ async def start_call(
         external_call_id=None,
         channel=selection.channel,
         status=CallStatus.QUEUED,
-        direction="outbound",
+        direction=CallDirection.OUTBOUND,
+        caller_type=CallerType.HUMAN_OPERATOR,
         customer_id=customer.id,
         operator_user_id=principal.user_id,
         call_flow_version_id=call_flow_version.id if call_flow_version else None,
         language=customer.preferred_language,
-        started_at=now,
         provider=selection.provider.name,
         provider_state=TelephonyCallState.QUEUED.value,
         from_number=selection.from_number,
@@ -330,12 +355,11 @@ async def answer_call(
     session: SessionDep,
     principal: Principal = require_permission("dialer:use"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
+    expected_version: int | None = Header(default=None, alias="X-Call-State-Version", ge=0),
 ) -> CallRead:
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
-    if call.status == CallStatus.ACTIVE and call.provider_state == TelephonyCallState.ACTIVE:
+    if call.status == CallStatus.ACTIVE:
         return serialize_call(call)
-    if call.status != CallStatus.RINGING:
-        raise ApiError(409, "call_not_ringing", "Ответить можно только на звонок со статусом ringing")
     await execute_call_command(
         session,
         principal=principal,
@@ -343,6 +367,7 @@ async def answer_call(
         command=TelephonyCommandName.ANSWER,
         correlation_id=request.state.correlation_id,
         idempotency_key=idempotency_key,
+        expected_version=expected_version,
     )
     await session.commit()
     return serialize_call(call)
@@ -355,12 +380,25 @@ async def hangup_call(
     session: SessionDep,
     principal: Principal = require_permission("dialer:use"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
+    expected_version: int | None = Header(default=None, alias="X-Call-State-Version", ge=0),
 ) -> CallRead:
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
-    if call.status == CallStatus.COMPLETED:
+    if call.status in TERMINAL_CALL_STATES:
         return serialize_call(call)
-    if call.status not in (CallStatus.RINGING, CallStatus.ACTIVE):
-        raise ApiError(409, "call_not_active", "Звонок уже не активен")
+    if call.status == CallStatus.QUEUED:
+        await CallStateService().transition(
+            session,
+            call=call,
+            target=CallStatus.CANCELLED,
+            event_type="call.cancelled",
+            occurred_at=datetime.now(UTC),
+            correlation_id=request.state.correlation_id,
+            actor_user_id=principal.user_id,
+            expected_version=expected_version,
+            hangup_cause=HangupCause.CANCELLED,
+        )
+        await session.commit()
+        return serialize_call(call)
     await execute_call_command(
         session,
         principal=principal,
@@ -369,6 +407,7 @@ async def hangup_call(
         correlation_id=request.state.correlation_id,
         idempotency_key=idempotency_key,
         parameters={"reason": "normal"},
+        expected_version=expected_version,
     )
     await session.commit()
     return serialize_call(call)
@@ -383,6 +422,7 @@ async def execute_call_command(
     correlation_id: str,
     idempotency_key: str | None,
     parameters: dict[str, str | int | float | bool] | None = None,
+    expected_version: int | None = None,
 ) -> None:
     project = await resolve_project(session, principal, call.project_id, active_only=False)
     telephony = TelephonyService()
@@ -397,6 +437,7 @@ async def execute_call_command(
         actor_user_id=principal.user_id,
         idempotency_key=idempotency_key,
         parameters=parameters,
+        expected_version=expected_version,
     )
 
 
@@ -407,12 +448,11 @@ async def hold_call(
     session: SessionDep,
     principal: Principal = require_permission("dialer:use"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
+    expected_version: int | None = Header(default=None, alias="X-Call-State-Version", ge=0),
 ) -> CallRead:
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
-    if call.provider_state == TelephonyCallState.ON_HOLD:
+    if call.status == CallStatus.ON_HOLD:
         return serialize_call(call)
-    if call.status != CallStatus.ACTIVE or call.provider_state != TelephonyCallState.ACTIVE:
-        raise ApiError(409, "call_not_active", "Удержать можно только активный звонок")
     await execute_call_command(
         session,
         principal=principal,
@@ -420,6 +460,7 @@ async def hold_call(
         command=TelephonyCommandName.HOLD,
         correlation_id=request.state.correlation_id,
         idempotency_key=idempotency_key,
+        expected_version=expected_version,
     )
     await session.commit()
     return serialize_call(call)
@@ -432,12 +473,11 @@ async def resume_call(
     session: SessionDep,
     principal: Principal = require_permission("dialer:use"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
+    expected_version: int | None = Header(default=None, alias="X-Call-State-Version", ge=0),
 ) -> CallRead:
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
-    if call.provider_state == TelephonyCallState.ACTIVE:
+    if call.status == CallStatus.ACTIVE:
         return serialize_call(call)
-    if call.status != CallStatus.ACTIVE or call.provider_state != TelephonyCallState.ON_HOLD:
-        raise ApiError(409, "call_not_on_hold", "Звонок не находится на удержании")
     await execute_call_command(
         session,
         principal=principal,
@@ -445,6 +485,7 @@ async def resume_call(
         command=TelephonyCommandName.RESUME,
         correlation_id=request.state.correlation_id,
         idempotency_key=idempotency_key,
+        expected_version=expected_version,
     )
     await session.commit()
     return serialize_call(call)
@@ -458,13 +499,11 @@ async def transfer_call(
     session: SessionDep,
     principal: Principal = require_permission("dialer:use"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
+    expected_version: int | None = Header(default=None, alias="X-Call-State-Version", ge=0),
 ) -> CallRead:
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
-    if call.status != CallStatus.ACTIVE or call.provider_state not in {
-        TelephonyCallState.ACTIVE,
-        TelephonyCallState.ON_HOLD,
-    }:
-        raise ApiError(409, "call_not_transferable", "Звонок недоступен для перевода")
+    if call.status == CallStatus.TRANSFERRED:
+        return serialize_call(call)
     await execute_call_command(
         session,
         principal=principal,
@@ -473,6 +512,7 @@ async def transfer_call(
         correlation_id=request.state.correlation_id,
         idempotency_key=idempotency_key,
         parameters={"destination": payload.destination, "reason": payload.reason},
+        expected_version=expected_version,
     )
     await session.commit()
     return serialize_call(call)
@@ -481,26 +521,127 @@ async def transfer_call(
 @router.get("/{call_id}/state", response_model=CallStateRead)
 async def get_call_state(
     call_id: UUID,
-    request: Request,
     session: SessionDep,
     principal: Principal = require_permission("dialer:use"),
 ) -> CallStateRead:
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
+    return await serialize_call_state(session, call)
+
+
+@router.post("/{call_id}/cancel", response_model=CallRead)
+async def cancel_call(
+    call_id: UUID,
+    request: Request,
+    session: SessionDep,
+    principal: Principal = require_permission("dialer:use"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=8, max_length=160),
+    expected_version: int | None = Header(default=None, alias="X-Call-State-Version", ge=0),
+) -> CallRead:
+    call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
+    if call.status in TERMINAL_CALL_STATES:
+        return serialize_call(call)
+    if call.status == CallStatus.QUEUED:
+        await CallStateService().transition(
+            session,
+            call=call,
+            target=CallStatus.CANCELLED,
+            event_type="call.cancelled",
+            occurred_at=datetime.now(UTC),
+            correlation_id=request.state.correlation_id,
+            actor_user_id=principal.user_id,
+            expected_version=expected_version,
+            hangup_cause=HangupCause.CANCELLED,
+        )
+        await session.commit()
+        return serialize_call(call)
     await execute_call_command(
         session,
         principal=principal,
         call=call,
-        command=TelephonyCommandName.GET_CALL_STATE,
+        command=TelephonyCommandName.HANGUP,
         correlation_id=request.state.correlation_id,
-        idempotency_key=f"state:{call.id}:{request.state.correlation_id}",
+        idempotency_key=idempotency_key,
+        parameters={"reason": "cancelled"},
+        expected_version=expected_version,
     )
     await session.commit()
+    return serialize_call(call)
+
+
+@router.post("/{call_id}/reconcile", response_model=CallReconciliationRead)
+async def reconcile_call(
+    call_id: UUID,
+    request: Request,
+    session: SessionDep,
+    principal: Principal = require_permission("dialer:use"),
+    expected_version: int | None = Header(default=None, alias="X-Call-State-Version", ge=0),
+) -> CallReconciliationRead:
+    call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
+    project = await resolve_project(session, principal, call.project_id, active_only=False)
+    telephony = TelephonyService()
+    selection = await telephony.selection_for_call(session, call=call, project=project)
+    result = await CallReconciliationService(telephony).reconcile(
+        session,
+        call=call,
+        project=project,
+        selection=selection,
+        correlation_id=request.state.correlation_id,
+        actor_user_id=principal.user_id,
+        expected_version=expected_version,
+    )
+    await session.commit()
+    return CallReconciliationRead(
+        call=await serialize_call_state(session, call),
+        provider_state=result.provider_state,
+        reconciled=result.reconciled,
+        ignored_reason=result.ignored_reason,
+    )
+
+
+async def serialize_call_state(session: SessionDep, call: Call) -> CallStateRead:
+    last_event = await session.scalar(
+        select(CallEvent)
+        .where(CallEvent.tenant_id == call.tenant_id, CallEvent.call_id == call.id)
+        .order_by(CallEvent.sequence.desc())
+        .limit(1)
+    )
+    transfer_state = (
+        call.status
+        if call.status
+        in {
+            CallStatus.TRANSFER_REQUESTED,
+            CallStatus.TRANSFERRING,
+            CallStatus.TRANSFERRED,
+        }
+        else None
+    )
     return CallStateRead(
         call_id=call.id,
+        status=call.status,
+        state_version=call.state_version,
+        direction=call.direction,
         provider=call.provider,
         provider_call_id=call.external_call_id,
-        state=TelephonyCallState(call.provider_state),
+        state=call.status,
         recording_state=call.recording_state,
+        allowed_actions=allowed_actions(call.status, recording_state=call.recording_state),
+        transfer_state=transfer_state,
+        started_at=call.started_at,
+        ringing_at=call.ringing_at,
+        answered_at=call.answered_at,
+        held_at=call.held_at,
+        ended_at=call.ended_at,
+        hangup_cause=call.hangup_cause,
+        terminal=call.status in TERMINAL_CALL_STATES,
+        last_event=(
+            CallLastEventRead(
+                event_type=last_event.event_type,
+                sequence=last_event.sequence,
+                occurred_at=last_event.occurred_at,
+            )
+            if last_event
+            else None
+        ),
         updated_at=call.updated_at,
     )
 
@@ -572,8 +713,8 @@ async def active_operator_call(
             Call.tenant_id == principal.tenant_id,
             Call.operator_user_id == principal.user_id,
             or_(
-                Call.status.in_([CallStatus.RINGING, CallStatus.ACTIVE]),
-                and_(Call.status == CallStatus.COMPLETED, CallOutcome.id.is_(None)),
+                Call.status.in_(CAPACITY_CALL_STATES),
+                and_(Call.status.in_(TERMINAL_CALL_STATES), CallOutcome.id.is_(None)),
             ),
         )
         .order_by(Call.started_at.desc())
@@ -593,6 +734,12 @@ async def save_call_result(
 ) -> CallResultResponse:
     now = datetime.now(UTC)
     call = await controlled_call(session, principal.tenant_id, principal.user_id, call_id)
+    if call.status == CallStatus.QUEUED:
+        raise ApiError(
+            409,
+            "call_not_started",
+            "Нельзя сохранить результат до запуска звонка",
+        )
     project = await resolve_project(session, principal, call.project_id, active_only=False)
     if call.customer_id is None:
         raise ApiError(409, "call_customer_missing", "У звонка отсутствует клиент")
@@ -645,7 +792,7 @@ async def save_call_result(
                 raise ApiError(409, "idempotency_key_reused", "Idempotency-Key уже использован")
             return CallResultResponse.model_validate(replay.response_payload)
 
-    if call.status in (CallStatus.RINGING, CallStatus.ACTIVE):
+    if call.status in CAPACITY_CALL_STATES - {CallStatus.QUEUED}:
         await execute_call_command(
             session,
             principal=principal,

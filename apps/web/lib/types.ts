@@ -55,26 +55,43 @@ export type TranscriptSegment = {
   created_at: string;
 };
 
+export type CallStatus =
+  | "queued"
+  | "initiated"
+  | "ringing"
+  | "active"
+  | "on_hold"
+  | "transfer_requested"
+  | "transferring"
+  | "transferred"
+  | "completed"
+  | "busy"
+  | "no_answer"
+  | "failed"
+  | "cancelled";
+
 export type Call = {
   id: string;
   project_id: string;
   channel: "sip" | "development_simulator";
-  status:
-    "queued" | "ringing" | "active" | "transferring" | "completed" | "failed";
+  status: CallStatus;
   language: string | null;
   customer_id: string | null;
   operator_user_id: string | null;
   ai_operator_id: string | null;
   call_flow_version_id?: string | null;
-  direction: string;
+  direction: "inbound" | "outbound";
+  caller_type: "human_operator" | "ai_agent";
   provider: string;
   provider_call_id: string | null;
   provider_state:
     | "queued"
+    | "initiated"
     | "ringing"
     | "active"
     | "on_hold"
     | "transfer_requested"
+    | "transferring"
     | "transferred"
     | "completed"
     | "busy"
@@ -86,10 +103,28 @@ export type Call = {
   from_number: string | null;
   to_number: string | null;
   started_at: string | null;
+  ringing_at: string | null;
   answered_at: string | null;
+  held_at: string | null;
   ended_at: string | null;
   duration_seconds: number;
   transfer_reason: string | null;
+  hangup_cause:
+    | "normal"
+    | "caller_hangup"
+    | "operator_hangup"
+    | "busy"
+    | "no_answer"
+    | "rejected"
+    | "network_error"
+    | "provider_error"
+    | "timeout"
+    | "cancelled"
+    | "unknown"
+    | null;
+  raw_provider_cause: string | null;
+  last_provider_event_at: string | null;
+  state_version: number;
   is_demo: boolean;
 };
 

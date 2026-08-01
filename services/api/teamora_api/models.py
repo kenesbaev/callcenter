@@ -28,9 +28,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from teamora_api.db import Base, TenantOwnedMixin, TimestampMixin, UUIDPrimaryKeyMixin
 from teamora_api.enums import (
     CallChannel,
+    CallDirection,
+    CallerType,
     CallResultCategory,
     CallStatus,
     DeliveryStatus,
+    HangupCause,
     IntegrationStatus,
     LanguageCode,
     LanguageReadiness,
@@ -864,7 +867,12 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     external_call_id: Mapped[str | None] = mapped_column(String(160))
     channel: Mapped[CallChannel] = mapped_column(enum_type(CallChannel), nullable=False)
     status: Mapped[CallStatus] = mapped_column(enum_type(CallStatus), default=CallStatus.QUEUED, index=True)
-    direction: Mapped[str] = mapped_column(String(16), default="inbound")
+    direction: Mapped[CallDirection] = mapped_column(
+        enum_type(CallDirection, length=16), default=CallDirection.INBOUND, nullable=False
+    )
+    caller_type: Mapped[CallerType] = mapped_column(
+        enum_type(CallerType, length=24), default=CallerType.HUMAN_OPERATOR, nullable=False
+    )
     phone_number_id: Mapped[UUID | None] = mapped_column(ForeignKey("phone_numbers.id", ondelete="SET NULL"))
     customer_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("customers.id", ondelete="SET NULL"), index=True
@@ -879,19 +887,46 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     call_flow_version_id: Mapped[UUID | None] = mapped_column(index=True)
     language: Mapped[LanguageCode | None] = mapped_column(enum_type(LanguageCode))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ringing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    held_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     provider: Mapped[str] = mapped_column(String(40), default="mock", nullable=False)
     provider_state: Mapped[str] = mapped_column(String(40), default="queued", nullable=False)
     recording_state: Mapped[str] = mapped_column(String(40), default="stopped", nullable=False)
     provider_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    last_provider_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    hangup_cause: Mapped[HangupCause | None] = mapped_column(enum_type(HangupCause, length=40), nullable=True)
+    raw_provider_cause: Mapped[str | None] = mapped_column(String(160))
     from_number: Mapped[str | None] = mapped_column(String(32))
     to_number: Mapped[str | None] = mapped_column(String(32))
     transfer_reason: Mapped[str | None] = mapped_column(String(500))
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'initiated', 'ringing', 'active', 'on_hold', "
+            "'transfer_requested', 'transferring', 'transferred', 'completed', "
+            "'busy', 'no_answer', 'failed', 'cancelled')",
+            name="call_status_valid",
+        ),
+        CheckConstraint(
+            "direction IN ('inbound', 'outbound')",
+            name="call_direction_valid",
+        ),
+        CheckConstraint(
+            "caller_type IN ('human_operator', 'ai_agent')",
+            name="call_caller_type_valid",
+        ),
+        CheckConstraint("state_version >= 0", name="call_state_version_non_negative"),
+        Index(
+            "ix_calls_tenant_status_last_event",
+            "tenant_id",
+            "status",
+            "last_provider_event_at",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "project_id"],
             ["projects.tenant_id", "projects.id"],

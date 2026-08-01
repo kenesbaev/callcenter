@@ -7,9 +7,10 @@ from fastapi import APIRouter, Request
 from sqlalchemy import and_, select
 
 from teamora_api.audit import write_audit
+from teamora_api.call_state import CAPACITY_CALL_STATES
 from teamora_api.config import get_settings
 from teamora_api.dependencies import Principal, SessionDep, require_permission
-from teamora_api.enums import CallStatus, IntegrationStatus, LanguageCode
+from teamora_api.enums import IntegrationStatus, LanguageCode
 from teamora_api.errors import ApiError
 from teamora_api.models import (
     Call,
@@ -59,7 +60,7 @@ async def live_calls(
             select(Call)
             .where(
                 Call.tenant_id == principal.tenant_id,
-                Call.status.in_([CallStatus.ACTIVE, CallStatus.TRANSFERRING]),
+                Call.status.in_(CAPACITY_CALL_STATES),
             )
             .order_by(Call.started_at.desc())
             .limit(100)

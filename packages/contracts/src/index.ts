@@ -94,10 +94,12 @@ export const telephonyCommandNames = [
 export type TelephonyCommandName = (typeof telephonyCommandNames)[number];
 export type TelephonyCallState =
   | "queued"
+  | "initiated"
   | "ringing"
   | "active"
   | "on_hold"
   | "transfer_requested"
+  | "transferring"
   | "transferred"
   | "completed"
   | "busy"

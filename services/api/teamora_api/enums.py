@@ -36,11 +36,42 @@ class OperatorVersionStatus(StrEnum):
 
 class CallStatus(StrEnum):
     QUEUED = "queued"
+    INITIATED = "initiated"
     RINGING = "ringing"
     ACTIVE = "active"
+    ON_HOLD = "on_hold"
+    TRANSFER_REQUESTED = "transfer_requested"
     TRANSFERRING = "transferring"
+    TRANSFERRED = "transferred"
     COMPLETED = "completed"
+    BUSY = "busy"
+    NO_ANSWER = "no_answer"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class CallDirection(StrEnum):
+    INBOUND = "inbound"
+    OUTBOUND = "outbound"
+
+
+class CallerType(StrEnum):
+    HUMAN_OPERATOR = "human_operator"
+    AI_AGENT = "ai_agent"
+
+
+class HangupCause(StrEnum):
+    NORMAL = "normal"
+    CALLER_HANGUP = "caller_hangup"
+    OPERATOR_HANGUP = "operator_hangup"
+    BUSY = "busy"
+    NO_ANSWER = "no_answer"
+    REJECTED = "rejected"
+    NETWORK_ERROR = "network_error"
+    PROVIDER_ERROR = "provider_error"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
 
 
 class CallChannel(StrEnum):
@@ -65,10 +96,12 @@ class TelephonyCommandName(StrEnum):
 
 class TelephonyCallState(StrEnum):
     QUEUED = "queued"
+    INITIATED = "initiated"
     RINGING = "ringing"
     ACTIVE = "active"
     ON_HOLD = "on_hold"
     TRANSFER_REQUESTED = "transfer_requested"
+    TRANSFERRING = "transferring"
     TRANSFERRED = "transferred"
     COMPLETED = "completed"
     BUSY = "busy"

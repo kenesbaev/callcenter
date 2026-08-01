@@ -151,8 +151,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Create an isolated local PostgreSQL database, run API tests, and remove it."
     )
-    parser.add_argument("pytest_args", nargs=argparse.REMAINDER)
-    arguments = parser.parse_args()
+    _arguments, pytest_args = parser.parse_known_args()
 
     settings = settings_from_repository()
     if settings.app_env in {"staging", "production"}:
@@ -214,8 +213,10 @@ def main() -> int:
                 sys.executable,
                 "-m",
                 "pytest",
+                "-p",
+                "no:cacheprovider",
                 str(API_ROOT / "tests"),
-                *arguments.pytest_args,
+                *pytest_args,
             ],
             cwd=REPOSITORY_ROOT,
             env=environment,

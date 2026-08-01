@@ -9,8 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from teamora_api.enums import (
     CallChannel,
+    CallDirection,
+    CallerType,
     CallResultCategory,
     CallStatus,
+    HangupCause,
     LanguageCode,
     TaskPriority,
     TranscriptSpeaker,
@@ -56,7 +59,8 @@ class CallRead(BaseModel):
     operator_user_id: UUID | None
     ai_operator_id: UUID | None
     call_flow_version_id: UUID | None
-    direction: str
+    direction: CallDirection
+    caller_type: CallerType
     provider: str
     provider_call_id: str | None = Field(validation_alias="external_call_id")
     provider_state: str
@@ -64,10 +68,16 @@ class CallRead(BaseModel):
     from_number: str | None
     to_number: str | None
     started_at: datetime | None
+    ringing_at: datetime | None
     answered_at: datetime | None
+    held_at: datetime | None
     ended_at: datetime | None
     duration_seconds: int
     transfer_reason: str | None
+    hangup_cause: HangupCause | None
+    raw_provider_cause: str | None
+    last_provider_event_at: datetime | None
+    state_version: int
     is_demo: bool
 
 

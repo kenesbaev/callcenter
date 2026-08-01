@@ -10,11 +10,16 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from teamora_api.call_events import append_call_event
 from teamora_api.call_flow_service import active_version_for_project
+from teamora_api.call_state import CallStateService
 from teamora_api.domain.knowledge import search_knowledge
 from teamora_api.enums import (
     CallChannel,
+    CallDirection,
+    CallerType,
     CallStatus,
+    HangupCause,
     LanguageCode,
     OperatorVersionStatus,
     ToolExecutionStatus,
@@ -26,7 +31,6 @@ from teamora_api.models import (
     AiOperator,
     AiOperatorVersion,
     Call,
-    CallEvent,
     CallSummary,
     Customer,
     CustomerContact,
@@ -184,15 +188,17 @@ async def create_simulated_call(
         project_id=operator.project_id,
         external_call_id=external_id,
         channel=CallChannel.DEVELOPMENT_SIMULATOR,
-        status=CallStatus.ACTIVE,
-        direction="inbound",
+        status=CallStatus.QUEUED,
+        direction=CallDirection.OUTBOUND,
+        caller_type=CallerType.AI_AGENT,
         customer_id=customer.id,
         ai_operator_id=ai_operator_id,
         ai_operator_version_id=version.id,
         call_flow_version_id=call_flow_version.id if call_flow_version else None,
         language=language,
         started_at=now,
-        answered_at=now,
+        provider="mock",
+        provider_state=CallStatus.QUEUED.value,
         is_demo=True,
     )
     session.add(call)
@@ -206,14 +212,32 @@ async def create_simulated_call(
         text=version.greeting_by_language.get(language.value) or DISCLOSURES[language],
     )
     session.add(disclosure)
-    session.add(
-        CallEvent(
-            tenant_id=tenant_id,
-            call_id=call.id,
-            event_type="simulation.started",
-            sequence=1,
-            safe_payload={"language": language.value, "channel": "development_simulator"},
+    state_service = CallStateService()
+    correlation_id = f"simulator-start:{call.id}"
+    for target, event_type in (
+        (CallStatus.INITIATED, "call.initiated"),
+        (CallStatus.RINGING, "call.ringing"),
+        (CallStatus.ACTIVE, "call.answered"),
+    ):
+        await state_service.transition(
+            session,
+            call=call,
+            target=target,
+            event_type=event_type,
+            occurred_at=now,
+            correlation_id=correlation_id,
+            actor_user_id=None,
+            provider="mock",
+            external_call_id=external_id,
         )
+    await append_call_event(
+        session,
+        tenant_id=tenant_id,
+        call_id=call.id,
+        event_type="simulation.started",
+        safe_payload={"language": language.value, "channel": "development_simulator"},
+        occurred_at=now,
+        correlation_id=correlation_id,
     )
     await session.flush()
     return call, disclosure
@@ -271,8 +295,29 @@ async def add_simulated_message(
             "transfer_requested": True,
             "reason": "explicit_request" if asks_for_human(text) else "knowledge_gap",
         }
-        call.status = CallStatus.TRANSFERRING
         call.transfer_reason = str(safe_result["reason"])
+        state_service = CallStateService()
+        correlation_id = f"simulator-message:{execution_key}"
+        await state_service.transition(
+            session,
+            call=call,
+            target=CallStatus.TRANSFER_REQUESTED,
+            event_type="transfer.requested",
+            occurred_at=datetime.now(UTC),
+            correlation_id=correlation_id,
+            actor_user_id=None,
+            provider="mock",
+        )
+        await state_service.transition(
+            session,
+            call=call,
+            target=CallStatus.TRANSFERRING,
+            event_type="transfer.started",
+            occurred_at=datetime.now(UTC),
+            correlation_id=correlation_id,
+            actor_user_id=None,
+            provider="mock",
+        )
         session.add(
             TransferRequest(
                 tenant_id=tenant_id,
@@ -308,25 +353,13 @@ async def add_simulated_message(
         text=answer,
     )
     session.add_all([execution, assistant_segment])
-    event_sequence = (
-        int(
-            await session.scalar(
-                select(func.max(CallEvent.sequence)).where(
-                    CallEvent.tenant_id == tenant_id, CallEvent.call_id == call.id
-                )
-            )
-            or 0
-        )
-        + 1
-    )
-    session.add(
-        CallEvent(
-            tenant_id=tenant_id,
-            call_id=call.id,
-            event_type=f"tool.{tool_name}",
-            sequence=event_sequence,
-            safe_payload={"status": "succeeded", "transfer_requested": transfer_requested},
-        )
+    await append_call_event(
+        session,
+        tenant_id=tenant_id,
+        call_id=call.id,
+        event_type=f"tool.{tool_name}",
+        safe_payload={"status": "succeeded", "transfer_requested": transfer_requested},
+        correlation_id=f"simulator-message:{execution_key}",
     )
     await session.flush()
     return call, customer_segment, assistant_segment, execution, transfer_requested
@@ -352,12 +385,25 @@ async def finish_simulated_call(
             raise ApiError(409, "call_finish_incomplete", "Existing call finalization is incomplete")
         return call, existing_summary, usage
 
-    if call.status not in {CallStatus.ACTIVE, CallStatus.TRANSFERRING}:
+    if call.status not in {
+        CallStatus.ACTIVE,
+        CallStatus.TRANSFER_REQUESTED,
+        CallStatus.TRANSFERRING,
+    }:
         raise ApiError(409, "call_not_active", "Call cannot be finalized from its current state")
     now = datetime.now(UTC)
-    call.ended_at = now
-    call.duration_seconds = max(1, int((now - (call.started_at or now)).total_seconds()))
-    call.status = CallStatus.COMPLETED
+    await CallStateService().transition(
+        session,
+        call=call,
+        target=CallStatus.COMPLETED,
+        event_type="call.hangup",
+        occurred_at=now,
+        correlation_id=f"simulator-finish:{call.id}:{idempotency_key}",
+        actor_user_id=None,
+        provider="mock",
+        hangup_cause=HangupCause.NORMAL,
+    )
+    call.duration_seconds = max(1, call.duration_seconds)
     segments = list(
         await session.scalars(
             select(TranscriptSegment)

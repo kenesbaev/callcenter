@@ -24,6 +24,7 @@ import { Button, StatusBadge } from "@teamora/ui";
 import { ApiClientError, apiRequest, idempotencyKey } from "@/lib/api";
 import type {
   Call,
+  CallStatus,
   CallResultCatalog,
   CallResultCategory,
   CallResultDefinition,
@@ -87,20 +88,60 @@ function formatTimer(seconds: number) {
   return `${minutes}:${rest}`;
 }
 
+const terminalCallStates = new Set<CallStatus>([
+  "completed",
+  "busy",
+  "no_answer",
+  "failed",
+  "cancelled",
+]);
+
+const callStateLabels: Record<CallStatus, string> = {
+  queued: "В очереди",
+  initiated: "Инициализация",
+  ringing: "Вызов клиента",
+  active: "Разговор",
+  on_hold: "На удержании",
+  transfer_requested: "Запрошен перевод",
+  transferring: "Перевод",
+  transferred: "Передан оператору",
+  completed: "Завершён",
+  busy: "Занято",
+  no_answer: "Нет ответа",
+  failed: "Ошибка звонка",
+  cancelled: "Отменён",
+};
+
+export function newestCall(
+  current: Call | null | undefined,
+  incoming: Call | null,
+) {
+  if (!current || !incoming) return incoming;
+  return incoming.state_version >= current.state_version ? incoming : current;
+}
+
+function commandHeaders(call: Call | null | undefined, prefix: string) {
+  return {
+    "Idempotency-Key": idempotencyKey(prefix),
+    ...(call ? { "X-Call-State-Version": String(call.state_version) } : {}),
+  };
+}
+
+export function callElapsedSeconds(call: Call, now = Date.now()) {
+  if (!call.answered_at) return 0;
+  const end = call.ended_at ? new Date(call.ended_at).getTime() : now;
+  return Math.max(
+    0,
+    Math.floor((end - new Date(call.answered_at).getTime()) / 1000),
+  );
+}
+
 function useCallSeconds(call: Call | null | undefined) {
   const [seconds, setSeconds] = useState(call?.duration_seconds ?? 0);
   useEffect(() => {
     const update = () => {
       if (!call) return setSeconds(0);
-      if (call.status === "completed") return setSeconds(call.duration_seconds);
-      const start = call.answered_at ?? call.started_at;
-      if (!start) return setSeconds(0);
-      setSeconds(
-        Math.max(
-          0,
-          Math.floor((Date.now() - new Date(start).getTime()) / 1000),
-        ),
-      );
+      setSeconds(callElapsedSeconds(call));
     };
     update();
     const timer = window.setInterval(update, 1000);
@@ -139,6 +180,8 @@ export function DialerView() {
     queryKey: ["dialer", "active-call"],
     queryFn: () => apiRequest<Call | null>("/calls/active"),
     refetchInterval: 5000,
+    structuralSharing: (current, incoming) =>
+      newestCall(current as Call | null | undefined, incoming as Call | null),
   });
   const callResults = useQuery({
     queryKey: ["call-results", "available", selectedProjectId],
@@ -242,54 +285,69 @@ export function DialerView() {
     mutationFn: () =>
       apiRequest<Call>(`/calls/${call?.id}/answer`, {
         method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("dialer-answer") },
+        headers: commandHeaders(call, "dialer-answer"),
       }),
     onSuccess: (value) =>
-      queryClient.setQueryData(["dialer", "active-call"], value),
+      queryClient.setQueryData<Call | null>(
+        ["dialer", "active-call"],
+        (current) => newestCall(current, value),
+      ),
     onError: showError,
   });
   const hangupCall = useMutation({
     mutationFn: () =>
       apiRequest<Call>(`/calls/${call?.id}/hangup`, {
         method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("dialer-hangup") },
+        headers: commandHeaders(call, "dialer-hangup"),
       }),
     onSuccess: (value) =>
-      queryClient.setQueryData(["dialer", "active-call"], value),
+      queryClient.setQueryData<Call | null>(
+        ["dialer", "active-call"],
+        (current) => newestCall(current, value),
+      ),
     onError: showError,
   });
   const holdCall = useMutation({
     mutationFn: () =>
       apiRequest<Call>(`/calls/${call?.id}/hold`, {
         method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("dialer-hold") },
+        headers: commandHeaders(call, "dialer-hold"),
       }),
     onSuccess: (value) =>
-      queryClient.setQueryData(["dialer", "active-call"], value),
+      queryClient.setQueryData<Call | null>(
+        ["dialer", "active-call"],
+        (current) => newestCall(current, value),
+      ),
     onError: showError,
   });
   const resumeCall = useMutation({
     mutationFn: () =>
       apiRequest<Call>(`/calls/${call?.id}/resume`, {
         method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("dialer-resume") },
+        headers: commandHeaders(call, "dialer-resume"),
       }),
     onSuccess: (value) =>
-      queryClient.setQueryData(["dialer", "active-call"], value),
+      queryClient.setQueryData<Call | null>(
+        ["dialer", "active-call"],
+        (current) => newestCall(current, value),
+      ),
     onError: showError,
   });
   const transferCall = useMutation({
     mutationFn: () =>
       apiRequest<Call>(`/calls/${call?.id}/transfer`, {
         method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("dialer-transfer") },
+        headers: commandHeaders(call, "dialer-transfer"),
         body: JSON.stringify({
           destination: "operator-queue",
           reason: "operator_requested",
         }),
       }),
     onSuccess: (value) => {
-      queryClient.setQueryData(["dialer", "active-call"], value);
+      queryClient.setQueryData<Call | null>(
+        ["dialer", "active-call"],
+        (current) => newestCall(current, value),
+      );
       setMessage("Звонок передан в очередь операторов Mock-провайдера.");
     },
     onError: showError,
@@ -592,15 +650,13 @@ export function DialerView() {
               {call && (
                 <div className={`active-call-console ${call.status}`}>
                   <div>
-                    <span>
-                      {call.status === "ringing" ? "Вызов клиента" : "Разговор"}
-                    </span>
+                    <span>{callStateLabels[call.status]}</span>
                     <strong className="call-timer">
                       {formatTimer(seconds)}
                     </strong>
                     <small>{call.to_number}</small>
                     <small>
-                      {call.provider} · {call.provider_state}
+                      {call.provider} · версия {call.state_version}
                     </small>
                   </div>
                   <div className="call-control-row">
@@ -613,54 +669,54 @@ export function DialerView() {
                         Имитировать ответ
                       </Button>
                     )}
-                    {call.status === "active" &&
-                      call.provider_state === "active" && (
-                        <>
-                          <Button
-                            disabled={isBusy}
-                            onClick={() => holdCall.mutate()}
-                            variant="secondary"
-                          >
-                            <PauseCircle size={17} />
-                            Удержать
-                          </Button>
-                          <Button
-                            disabled={isBusy}
-                            onClick={() => transferCall.mutate()}
-                            variant="secondary"
-                          >
-                            <PhoneForwarded size={17} />
-                            Перевести
-                          </Button>
-                        </>
-                      )}
-                    {call.status === "active" &&
-                      call.provider_state === "on_hold" && (
-                        <Button
-                          disabled={isBusy}
-                          onClick={() => resumeCall.mutate()}
-                          variant="secondary"
-                        >
-                          <PlayCircle size={17} />
-                          Продолжить
-                        </Button>
-                      )}
-                    {(call.status === "ringing" ||
-                      call.status === "active") && (
-                      <button
-                        aria-label="Завершить звонок"
-                        className="hangup-button"
+                    {(call.status === "active" ||
+                      call.status === "transferred") && (
+                      <Button
                         disabled={isBusy}
-                        onClick={() => hangupCall.mutate()}
-                        type="button"
+                        onClick={() => holdCall.mutate()}
+                        variant="secondary"
                       >
-                        <PhoneOff size={20} />
-                      </button>
+                        <PauseCircle size={17} />
+                        Удержать
+                      </Button>
                     )}
+                    {call.status === "on_hold" && (
+                      <Button
+                        disabled={isBusy}
+                        onClick={() => resumeCall.mutate()}
+                        variant="secondary"
+                      >
+                        <PlayCircle size={17} />
+                        Продолжить
+                      </Button>
+                    )}
+                    {(call.status === "active" ||
+                      call.status === "on_hold") && (
+                      <Button
+                        disabled={isBusy}
+                        onClick={() => transferCall.mutate()}
+                        variant="secondary"
+                      >
+                        <PhoneForwarded size={17} />
+                        Перевести
+                      </Button>
+                    )}
+                    {!terminalCallStates.has(call.status) &&
+                      call.status !== "queued" && (
+                        <button
+                          aria-label="Завершить звонок"
+                          className="hangup-button"
+                          disabled={isBusy}
+                          onClick={() => hangupCall.mutate()}
+                          type="button"
+                        >
+                          <PhoneOff size={20} />
+                        </button>
+                      )}
                   </div>
                 </div>
               )}
-              {call?.status === "completed" && (
+              {call && terminalCallStates.has(call.status) && (
                 <form
                   className="call-result-form"
                   onSubmit={resultForm.handleSubmit(submitResult)}

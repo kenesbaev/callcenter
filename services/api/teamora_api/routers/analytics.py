@@ -6,6 +6,7 @@ from decimal import Decimal
 from fastapi import APIRouter
 from sqlalchemy import func, select
 
+from teamora_api.call_state import CAPACITY_CALL_STATES
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import CallStatus
 from teamora_api.models import Call, UsageRecord
@@ -24,7 +25,7 @@ async def dashboard(
     metrics = (
         await session.execute(
             select(
-                func.count(Call.id).filter(Call.status.in_([CallStatus.ACTIVE, CallStatus.TRANSFERRING])),
+                func.count(Call.id).filter(Call.status.in_(CAPACITY_CALL_STATES)),
                 func.count(Call.id).filter(Call.started_at >= today),
                 func.count(Call.id).filter(Call.status == CallStatus.COMPLETED),
                 func.count(Call.id).filter(Call.transfer_reason.is_not(None)),
