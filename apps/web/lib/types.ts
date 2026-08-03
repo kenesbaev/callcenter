@@ -684,6 +684,171 @@ export type Dashboard = {
   is_demo: boolean;
 };
 
+export type AnalyticsMetric = {
+  value: number | null;
+  numerator: number | null;
+  denominator: number | null;
+  previous_value: number | null;
+  absolute_change: number | null;
+  percentage_change: number | null;
+  is_available: boolean;
+  data_quality_flags: string[];
+};
+
+export type AnalyticsSummary = {
+  period: {
+    date_from: string;
+    date_to: string;
+    timezone: string;
+    bucket: "hour" | "day";
+  };
+  active_calls: AnalyticsMetric;
+  attempted_calls: AnalyticsMetric;
+  connected_calls: AnalyticsMetric;
+  answer_rate: AnalyticsMetric;
+  successful_calls: AnalyticsMetric;
+  success_rate: AnalyticsMetric;
+  success_rate_connected: AnalyticsMetric;
+  average_duration_seconds: AnalyticsMetric;
+  ai_calls: AnalyticsMetric;
+  human_calls: AnalyticsMetric;
+  simulator_calls: AnalyticsMetric;
+  sip_calls: AnalyticsMetric;
+  ai_minutes: AnalyticsMetric;
+  ai_cost_usd: AnalyticsMetric;
+  callbacks: AnalyticsMetric;
+  transfers: {
+    requested: AnalyticsMetric;
+    successful: AnalyticsMetric;
+    failed: AnalyticsMetric;
+    success_rate: AnalyticsMetric;
+  };
+  data_quality_flags: string[];
+  telephony_cost_included: boolean;
+};
+
+export type AnalyticsDistribution = {
+  key: string;
+  label: string;
+  value: number;
+  color: string | null;
+};
+
+export type AnalyticsTimePoint = {
+  bucket_start: string;
+  attempted: number;
+  connected: number;
+  successful: number;
+  ai_calls: number;
+  human_calls: number;
+};
+
+export type AnalyticsRecentCall = {
+  id: string;
+  occurred_at: string;
+  project_id: string;
+  project_name: string;
+  customer_name: string | null;
+  phone_masked: string | null;
+  direction: string;
+  caller_type: string;
+  channel: string;
+  language: string | null;
+  duration_seconds: number;
+  result_label: string | null;
+  result_category: string | null;
+  status: string;
+  transferred: boolean;
+  operator_name: string | null;
+  is_test: boolean;
+};
+
+export type AnalyticsOverview = {
+  summary: AnalyticsSummary;
+  timeseries: AnalyticsTimePoint[];
+  outcomes: AnalyticsDistribution[];
+  languages: AnalyticsDistribution[];
+  callers: AnalyticsDistribution[];
+  channels: AnalyticsDistribution[];
+  tasks: {
+    overdue: number;
+    today: number;
+    future: number;
+    completed: number;
+    by_type: AnalyticsDistribution[];
+  };
+  operator_statuses: {
+    available: number;
+    busy: number;
+    on_hold: number;
+    away: number;
+    on_break: number;
+    offline: number;
+    active_members: number;
+    blocked_members: number;
+  };
+  recent_calls: {
+    items: AnalyticsRecentCall[];
+    total: number;
+    limit: number;
+    offset: number;
+  };
+};
+
+export type AnalyticsFilterOptions = {
+  projects: Array<{
+    id: string;
+    name: string;
+    status: string;
+    timezone: string;
+  }>;
+  operators: Array<{ id: string; name: string }>;
+  default_timezone: string;
+  max_period_days: number;
+  financial_metrics_visible: boolean;
+};
+
+export type OperatorPerformancePage = {
+  items: Array<{
+    operator_id: string;
+    operator_name: string;
+    project_names: string[];
+    attempted: number;
+    connected: number;
+    successful: number;
+    answer_rate: number | null;
+    success_rate: number | null;
+    average_duration_seconds: number | null;
+    transfers: number;
+    callbacks: number;
+    talk_time_seconds: number;
+    is_active: boolean;
+  }>;
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ProjectPerformancePage = {
+  items: Array<{
+    project_id: string;
+    project_name: string;
+    project_status: string;
+    attempted: number;
+    connected: number;
+    successful: number;
+    ai_calls: number;
+    human_calls: number;
+    callbacks: number;
+    ai_minutes: number;
+    ai_cost_usd: number | null;
+    cost_is_available: boolean;
+  }>;
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type TeamMember = {
   membership_id: string;
   user_id: string;

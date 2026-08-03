@@ -4699,7 +4699,198 @@ button:disabled {
   font-size: 12px;
 }
 
+.analytics-heading-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analytics-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(170px, 1fr) minmax(
+      190px,
+      1fr
+    );
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+}
+
+.analytics-filter-bar label {
+  display: grid;
+  gap: 6px;
+}
+
+.analytics-filter-bar label > span {
+  color: var(--tv-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.analytics-filter-bar select,
+.analytics-filter-bar input {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid var(--tv-border);
+  border-radius: 9px;
+  outline: none;
+  background: var(--tv-surface-elevated);
+  padding: 0 11px;
+  color: var(--tv-text-primary);
+}
+
+.analytics-filter-bar select:focus,
+.analytics-filter-bar input:focus {
+  border-color: var(--tv-primary);
+  box-shadow: 0 0 0 3px rgb(228 23 57 / 10%);
+}
+
+.analytics-metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.analytics-kpi {
+  min-height: 138px;
+}
+
+.analytics-kpi strong {
+  margin-top: 14px;
+}
+
+.analytics-kpi small {
+  display: block;
+  margin-top: 7px;
+  color: var(--tv-text-muted);
+  font-size: 11px;
+}
+
+.analytics-kpi em {
+  display: block;
+  margin-top: 5px;
+  color: var(--tv-text-muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.analytics-kpi .metric-up {
+  color: var(--tv-success);
+}
+
+.analytics-kpi .metric-down {
+  color: var(--tv-danger);
+}
+
+.analytics-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.55fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.analytics-chart {
+  height: 330px;
+  margin-top: 18px;
+}
+
+.analytics-chart.compact {
+  height: 280px;
+}
+
+.analytics-triple-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.analytics-status-list,
+.analytics-language-list {
+  display: grid;
+  gap: 2px;
+  margin-top: 16px;
+}
+
+.analytics-status-list > div,
+.analytics-language-list > div {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--tv-border);
+}
+
+.analytics-status-list > div:last-child,
+.analytics-language-list > div:last-child {
+  border-bottom: 0;
+}
+
+.analytics-status-list strong,
+.analytics-language-list strong {
+  margin-left: auto;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tv-text-muted);
+}
+
+.status-dot.available {
+  background: var(--tv-success);
+}
+.status-dot.busy {
+  background: var(--tv-primary);
+}
+.status-dot.on_hold {
+  background: var(--tv-warning);
+}
+.status-dot.away,
+.status-dot.on_break {
+  background: #d98716;
+}
+
+.analytics-table-panel,
+.analytics-quality {
+  margin-top: 16px;
+}
+
+.analytics-table-panel a {
+  color: var(--tv-primary);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.analytics-table-panel small,
+.analytics-empty-copy,
+.analytics-quality p,
+.analytics-quality small {
+  color: var(--tv-text-muted);
+}
+
+.analytics-performance-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.analytics-quality {
+  border-color: rgb(217 135 22 / 30%);
+  background: rgb(217 135 22 / 5%);
+}
+
+.analytics-quality p {
+  margin: 10px 0 6px;
+  line-height: 1.55;
+}
+
 @media (max-width: 1180px) {
+  .analytics-metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .analytics-triple-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .crm-inline-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4744,6 +4935,18 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
+  .analytics-filter-bar,
+  .analytics-metric-grid,
+  .analytics-main-grid,
+  .analytics-triple-grid,
+  .analytics-performance-grid {
+    grid-template-columns: 1fr;
+  }
+  .analytics-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
   .crm-inline-form,
   .callback-grid,
   .customer-facts,

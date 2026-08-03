@@ -215,6 +215,36 @@ test("оператор проходит полный Mock Dialer и сохран
   await expect(
     page.getByRole("heading", { name: "Ожидание клиента" }),
   ).toBeVisible();
+
+  await page.getByRole("link", { name: "Обзор" }).click();
+  await expect(page).toHaveURL(/\/app\/overview/);
+  await expect(
+    page
+      .locator("article.analytics-kpi")
+      .filter({ hasText: "Начатые попытки" })
+      .getByText("1", {
+        exact: true,
+      }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator("article.analytics-kpi")
+      .filter({ hasText: "Процент дозвона" })
+      .getByText("100%"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Последние звонки" }),
+  ).toBeVisible();
+  await page.getByLabel("Период").selectOption("7d");
+  await page.reload();
+  await expect(page.getByLabel("Период")).toHaveValue("7d");
+  await page.getByRole("link", { name: "Аналитика" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Производительность операторов" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Сравнение проектов" }),
+  ).toBeVisible();
 });
 
 test("владелец приглашает оператора, а присутствие и блокировка защищают Dialer", async ({

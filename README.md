@@ -80,6 +80,11 @@ The development Call Simulator additionally requires `APP_ENV=development` and `
 
 ## Verification
 
+Точные формулы Overview/Analytics, правила timezone, denominators и data-quality flags описаны в
+[`docs/analytics-metrics.md`](docs/analytics-metrics.md). Обе страницы используют общий backend
+query-layer; расходы SIP/DID не входят в оценку AI. Индексную миграцию аналитики и сохранность
+старых звонков проверяет `py -3.12 scripts/run_analytics_migration_test.py`.
+
 ```powershell
 npm run format:check
 npm run lint

@@ -1039,6 +1039,8 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
         ),
         UniqueConstraint("tenant_id", "external_call_id"),
         Index("ix_calls_tenant_started", "tenant_id", "started_at"),
+        Index("ix_calls_tenant_project_started", "tenant_id", "project_id", "started_at"),
+        Index("ix_calls_tenant_operator_started", "tenant_id", "operator_user_id", "started_at"),
         Index("ix_calls_project_status", "project_id", "status"),
     )
 
@@ -1187,6 +1189,7 @@ class CallEvent(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             unique=True,
             postgresql_where=text("provider_event_id IS NOT NULL"),
         ),
+        Index("ix_call_events_tenant_type_occurred", "tenant_id", "event_type", "occurred_at"),
     )
 
 
@@ -1391,6 +1394,7 @@ class CallbackTask(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
+        Index("ix_callback_tasks_tenant_project_created", "tenant_id", "project_id", "created_at"),
     )
 
     project_id: Mapped[UUID] = mapped_column(index=True)
@@ -1548,6 +1552,9 @@ class QueueMember(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class TransferRequest(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "transfer_requests"
+    __table_args__ = (
+        Index("ix_transfer_requests_tenant_status_requested", "tenant_id", "status", "requested_at"),
+    )
 
     call_id: Mapped[UUID] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), index=True)
     queue_id: Mapped[UUID | None] = mapped_column(ForeignKey("operator_queues.id", ondelete="SET NULL"))
@@ -1664,7 +1671,10 @@ class ToolExecution(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class UsageRecord(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "usage_records"
-    __table_args__ = (UniqueConstraint("tenant_id", "idempotency_key"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key"),
+        Index("ix_usage_records_tenant_metric_occurred", "tenant_id", "metric", "occurred_at"),
+    )
 
     call_id: Mapped[UUID | None] = mapped_column(ForeignKey("calls.id", ondelete="SET NULL"), index=True)
     metric: Mapped[str] = mapped_column(String(80), nullable=False)

@@ -88,6 +88,7 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "tasks:create",
             "tasks:manage",
             "simulator:use",
+            "analytics:self",
         }
     ),
     RoleName.ANALYST: frozenset(

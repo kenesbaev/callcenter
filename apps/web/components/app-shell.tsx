@@ -39,7 +39,12 @@ const dialerRoles: Role[] = [
   "human_operator",
 ];
 const managementRoles: Role[] = ["tenant_owner", "tenant_manager"];
-const analyticsRoles: Role[] = ["tenant_owner", "tenant_manager", "analyst"];
+const analyticsRoles: Role[] = [
+  "tenant_owner",
+  "tenant_manager",
+  "human_operator",
+  "analyst",
+];
 
 const primaryNav: Array<{
   href: string;
@@ -48,7 +53,7 @@ const primaryNav: Array<{
   roles?: Role[];
 }> = [
   { href: "/app/projects", label: "Проекты", icon: FolderKanban },
-  { href: "/app", label: "Обзор", icon: LayoutDashboard },
+  { href: "/app/overview", label: "Обзор", icon: LayoutDashboard },
   {
     href: "/app/dialer",
     label: "Диалер",
@@ -174,6 +179,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ["team"] });
     },
   });
+  const requiresLogin =
+    me.isError && me.error instanceof ApiClientError && me.error.status === 401;
+  useEffect(() => {
+    if (requiresLogin) router.replace("/login");
+  }, [requiresLogin, router]);
 
   if (me.isPending) {
     return (
@@ -186,10 +196,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   if (me.isError) {
-    if (me.error instanceof ApiClientError && me.error.status === 401) {
-      router.replace("/login");
-      return null;
-    }
+    if (requiresLogin) return null;
     return (
       <main className="app-gate" id="main-content">
         <div className="error-state panel">
