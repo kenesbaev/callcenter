@@ -17,6 +17,7 @@ import {
 } from "recharts";
 import { StatusBadge } from "@teamora/ui";
 import { apiRequest } from "@/lib/api";
+import { useRealtime } from "@/components/realtime-provider";
 import type {
   AnalyticsFilterOptions,
   AnalyticsMetric,
@@ -231,6 +232,7 @@ export function AnalyticsWorkspace({
 }: {
   detailed?: boolean;
 }) {
+  const realtime = useRealtime();
   const optionsQuery = useQuery({
     queryKey: ["analytics", "filter-options"],
     queryFn: () =>
@@ -290,7 +292,7 @@ export function AnalyticsWorkspace({
     queryFn: () =>
       apiRequest<AnalyticsOverview>(`/analytics/overview?${queryString}`),
     enabled: optionsQuery.isSuccess,
-    refetchInterval: 15_000,
+    refetchInterval: realtime.connected ? 120_000 : 30_000,
   });
   const operators = useQuery({
     queryKey: ["analytics", "operators", queryString],

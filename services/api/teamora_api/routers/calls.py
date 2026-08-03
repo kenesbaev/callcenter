@@ -51,6 +51,7 @@ from teamora_api.models import (
     TranscriptSegment,
 )
 from teamora_api.project_access import resolve_project
+from teamora_api.realtime import enqueue_analytics_invalidation, enqueue_realtime_event
 from teamora_api.schemas.calls import (
     CallDetail,
     CallOutcomeSnapshotRead,
@@ -317,6 +318,18 @@ async def start_call(
     )
     session.add(call)
     await session.flush()
+    await enqueue_realtime_event(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=call.project_id,
+        event_type="call.created",
+        aggregate_type="call",
+        aggregate_id=call.id,
+        aggregate_version=call.state_version,
+        payload={"status": call.status.value, "direction": call.direction.value},
+        occurred_at=now,
+        correlation_id=request.state.correlation_id,
+    )
     session.add(
         CallParticipant(
             tenant_id=principal.tenant_id,
@@ -1125,6 +1138,27 @@ async def save_call_result_transactional(
             "result": definition.system_code,
             "category": definition.category.value,
         },
+    )
+    await enqueue_realtime_event(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=call.project_id,
+        target_membership_id=principal.membership_id,
+        event_type="dialer.call_completed",
+        aggregate_type="call",
+        aggregate_id=call.id,
+        aggregate_version=call.state_version,
+        payload={"result_saved": True},
+        correlation_id=request.state.correlation_id,
+    )
+    await enqueue_analytics_invalidation(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=call.project_id,
+        aggregate_type="call_outcome",
+        aggregate_id=outcome.id,
+        correlation_id=request.state.correlation_id,
+        reason="call_result_saved",
     )
     await session.flush()
     response = CallResultResponse(

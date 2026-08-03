@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -47,15 +48,38 @@ async def _redis_status(timeout_seconds: float) -> str:
         await redis.aclose()
 
 
+async def _realtime_publisher_status(timeout_seconds: float) -> dict[str, object]:
+    settings = get_settings()
+    redis = Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=timeout_seconds,
+        socket_timeout=timeout_seconds,
+    )
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            raw_health = await redis.get("kline:realtime:publisher:health")
+        parsed = json.loads(raw_health) if raw_health else None
+        return parsed if isinstance(parsed, dict) else {"status": "unavailable"}
+    except Exception:
+        return {"status": "unavailable"}
+    finally:
+        await redis.aclose()
+
+
 @router.get("/ready", response_model=None)
 async def ready() -> dict[str, object] | JSONResponse:
     timeout_seconds = get_settings().dependency_health_timeout_seconds
-    postgres, redis = await asyncio.gather(
+    postgres, redis, publisher = await asyncio.gather(
         _postgres_status(timeout_seconds),
         _redis_status(timeout_seconds),
+        _realtime_publisher_status(timeout_seconds),
     )
     checks = {"postgres": postgres, "redis": redis}
-    if "unavailable" in checks.values():
+    if postgres == "unavailable":
         logger.warning("readiness_unavailable", checks=checks)
         return JSONResponse(status_code=503, content={"status": "unavailable", "checks": checks})
-    return {"status": "ok", "checks": checks}
+    status = "ok" if redis == "ok" and publisher.get("status") == "ok" else "degraded"
+    if status == "degraded":
+        logger.warning("readiness_degraded", checks=checks)
+    return {"status": status, "checks": checks, "realtime": {"publisher": publisher}}

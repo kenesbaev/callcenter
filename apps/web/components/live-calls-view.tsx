@@ -7,6 +7,7 @@ import { StatusBadge } from "@teamora/ui";
 import { apiRequest } from "@/lib/api";
 import type { Call } from "@/lib/types";
 import { QueryError, SectionSkeleton } from "@/components/query-state";
+import { useRealtime } from "@/components/realtime-provider";
 
 const languageLabel: Record<string, string> = {
   ru: "Русский",
@@ -16,10 +17,11 @@ const languageLabel: Record<string, string> = {
 };
 
 export function LiveCallsView() {
+  const realtime = useRealtime();
   const calls = useQuery({
     queryKey: ["live-calls"],
     queryFn: () => apiRequest<Call[]>("/live-calls"),
-    refetchInterval: 5_000,
+    refetchInterval: realtime.connected ? 60_000 : 15_000,
   });
 
   if (calls.isPending) return <SectionSkeleton />;

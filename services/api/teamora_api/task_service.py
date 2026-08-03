@@ -27,6 +27,7 @@ from teamora_api.models import (
     TaskEvent,
     User,
 )
+from teamora_api.realtime import enqueue_analytics_invalidation, enqueue_realtime_event
 
 
 def utc_due_at(value: datetime, *, allow_now: bool = False) -> datetime:
@@ -152,6 +153,35 @@ async def append_task_event(
         safe_snapshot=safe_snapshot or {},
     )
     session.add(event)
+    realtime_type = {
+        TaskEventType.CREATED: "task.created",
+        TaskEventType.COMPLETED: "task.completed",
+        TaskEventType.CANCELLED: "task.cancelled",
+    }.get(event_type, "task.updated")
+    await enqueue_realtime_event(
+        session,
+        tenant_id=task.tenant_id,
+        project_id=task.project_id,
+        target_membership_id=None,
+        event_type=realtime_type,
+        aggregate_type="task",
+        aggregate_id=task.id,
+        payload={
+            "task_type": task.task_type.value,
+            "status": task.status.value,
+            "assigned_user_id": task.assigned_user_id,
+        },
+        correlation_id=correlation_id,
+    )
+    await enqueue_analytics_invalidation(
+        session,
+        tenant_id=task.tenant_id,
+        project_id=task.project_id,
+        aggregate_type="task",
+        aggregate_id=task.id,
+        correlation_id=correlation_id,
+        reason="task_changed",
+    )
     return event
 
 

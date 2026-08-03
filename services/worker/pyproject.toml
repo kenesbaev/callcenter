@@ -7,6 +7,7 @@ name = "teamora-worker"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+  "asyncpg>=0.30,<1",
   "httpx>=0.28,<1",
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.9,<3",
@@ -32,6 +33,10 @@ ignore = ["S101"]
 python_version = "3.12"
 strict = true
 packages = ["teamora_worker"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

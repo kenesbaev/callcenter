@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Literal, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -471,7 +472,7 @@ async def build_summary(session: AsyncSession, scope: AnalyticsScope) -> Analyti
             date_from=scope.start,
             date_to=scope.end,
             timezone=scope.timezone,
-            bucket=scope.bucket,  # type: ignore[arg-type]
+            bucket=cast(Literal["hour", "day"], scope.bucket),
         ),
         active_calls=metric(active, None),
         attempted_calls=metric(current.attempted, previous.attempted),

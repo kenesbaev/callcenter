@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     database_connect_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
     dependency_health_timeout_seconds: float = Field(default=3.0, ge=0.5, le=15.0)
     redis_url: str = "redis://localhost:6379/0"
+    realtime_retention_hours: int = Field(default=24, ge=1, le=168)
+    realtime_replay_batch_size: int = Field(default=200, ge=10, le=1000)
+    realtime_max_subscriptions: int = Field(default=50, ge=1, le=500)
+    realtime_connections_per_membership: int = Field(default=5, ge=1, le=20)
+    realtime_messages_per_minute: int = Field(default=120, ge=10, le=1000)
+    realtime_max_message_bytes: int = Field(default=16 * 1024, ge=1024, le=64 * 1024)
+    realtime_subscribe_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
+    realtime_send_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
+    realtime_database_sweep_seconds: float = Field(default=5.0, ge=1.0, le=60.0)
+    realtime_auth_recheck_seconds: float = Field(default=30.0, ge=5.0, le=300.0)
     minio_endpoint: str = "http://localhost:9000"
     minio_bucket: str = "teamora-private"
     minio_region: str = "us-east-1"

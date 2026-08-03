@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Request
+from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, or_, select
 
 from teamora_api.audit import write_audit
@@ -32,6 +33,7 @@ from teamora_api.models import (
     User,
 )
 from teamora_api.project_access import resolve_project
+from teamora_api.realtime import enqueue_realtime_event
 from teamora_api.schemas.common import Page
 from teamora_api.schemas.team import (
     InvitationAccept,
@@ -75,7 +77,7 @@ TEAM_ROLES = {
 
 
 def request_fingerprint(payload: object) -> str:
-    body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload  # type: ignore[union-attr]
+    body = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
     encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -172,7 +174,7 @@ async def serialize_member(
         blocked_at=membership.blocked_at,
         blocked_reason=membership.blocked_reason,
         manual_status=state.manual_status,
-        effective_status=state.effective_status,  # type: ignore[arg-type]
+        effective_status=state.effective_status,
         is_transfer_available=operator.is_transfer_available if operator else False,
         current_call_id=state.current_call_id,
         projects=await member_projects(session, membership.tenant_id, membership.user_id),
@@ -309,7 +311,7 @@ async def own_presence(session: SessionDep, principal: PrincipalDep) -> Operator
     await session.flush()
     return OperatorPresenceRead(
         manual_status=state.manual_status,
-        effective_status=state.effective_status,  # type: ignore[arg-type]
+        effective_status=state.effective_status,
         last_heartbeat_at=state.last_heartbeat_at,
         heartbeat_ttl_seconds=PRESENCE_TTL_SECONDS,
         current_call_id=state.current_call_id,
@@ -329,7 +331,21 @@ async def heartbeat_presence(
         for_update=True,
     )
     await ensure_operator_profile(session, membership)
+    previous_seen_at = membership.presence_last_seen_at
     await touch_presence(session, membership, session_key=payload.session_key)
+    if previous_seen_at is None or previous_seen_at < datetime.now(UTC) - timedelta(
+        seconds=PRESENCE_TTL_SECONDS
+    ):
+        await enqueue_realtime_event(
+            session,
+            tenant_id=principal.tenant_id,
+            target_membership_id=principal.membership_id,
+            event_type="operator.presence_changed",
+            aggregate_type="membership",
+            aggregate_id=membership.id,
+            aggregate_version=membership.state_version,
+            payload={"presence": "online"},
+        )
     result = await own_presence(session, principal)
     await session.commit()
     return result
@@ -368,6 +384,16 @@ async def update_own_status(
             resource_id=membership.id,
             correlation_id=request.state.correlation_id,
             safe_metadata={"status": requested.value},
+        )
+        await enqueue_realtime_event(
+            session,
+            tenant_id=principal.tenant_id,
+            event_type="operator.status_changed",
+            aggregate_type="membership",
+            aggregate_id=membership.id,
+            aggregate_version=membership.state_version,
+            payload={"manual_status": requested.value},
+            correlation_id=request.state.correlation_id,
         )
     result = await own_presence(session, principal)
     await session.commit()
@@ -1046,6 +1072,16 @@ async def block_member(
         correlation_id=request.state.correlation_id,
         reason=payload.reason,
     )
+    await enqueue_realtime_event(
+        session,
+        tenant_id=principal.tenant_id,
+        event_type="team.member_blocked",
+        aggregate_type="membership",
+        aggregate_id=membership.id,
+        aggregate_version=membership.state_version,
+        payload={"active": False},
+        correlation_id=request.state.correlation_id,
+    )
     result = await serialize_member(session, membership)
     await session.commit()
     return result
@@ -1076,6 +1112,16 @@ async def restore_member(
         action="team.member_restored",
         resource_type="membership",
         resource_id=membership.id,
+        correlation_id=request.state.correlation_id,
+    )
+    await enqueue_realtime_event(
+        session,
+        tenant_id=principal.tenant_id,
+        event_type="team.member_restored",
+        aggregate_type="membership",
+        aggregate_id=membership.id,
+        aggregate_version=membership.state_version,
+        payload={"active": True},
         correlation_id=request.state.correlation_id,
     )
     result = await serialize_member(session, membership)

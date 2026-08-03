@@ -448,6 +448,8 @@ def main() -> int:
                     "127.0.0.1",
                     "--port",
                     "8100",
+                    "--timeout-graceful-shutdown",
+                    "5",
                 ],
                 environment=environment,
                 stdout=api_output,
@@ -473,6 +475,9 @@ def main() -> int:
                 environment={
                     **environment,
                     "API_INTERNAL_URL": "http://127.0.0.1:8100",
+                    "NEXT_PUBLIC_REALTIME_URL": (
+                        "ws://localhost:8100/api/v1/realtime/ws"
+                    ),
                 },
                 stdout=web_output,
                 stderr=subprocess.STDOUT,

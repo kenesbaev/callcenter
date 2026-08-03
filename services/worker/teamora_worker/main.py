@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from collections.abc import Awaitable
+from typing import Any, cast
 
 import structlog
 from redis.asyncio import Redis
 
 from teamora_worker.config import get_settings
 from teamora_worker.jobs import JobEnvelope
+from teamora_worker.realtime_publisher import RealtimePublisher
 
 structlog.configure(
     processors=[
@@ -34,28 +37,53 @@ async def run() -> None:
             loop.add_signal_handler(name, stopping.set)
         except NotImplementedError:
             signal.signal(name, request_stop)
+    publisher = RealtimePublisher(settings, client)
     log.info("worker_started", queue=settings.worker_queue)
     try:
-        while not stopping.is_set():
-            item = await client.brpop(settings.worker_queue, timeout=1)
-            if item is None:
-                continue
-            _, raw = item
-            try:
-                job = JobEnvelope.model_validate_json(raw)
-                # Job handlers are introduced per domain. Unknown/unwired jobs fail closed.
-                await client.lpush(settings.worker_dead_letter_queue, job.model_dump_json())
-                log.warning(
-                    "job_unavailable",
-                    job_type=job.job_type,
-                    tenant_id=str(job.tenant_id),
-                    idempotency_key=job.idempotency_key,
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(
+                _consume_jobs(
+                    client,
+                    settings.worker_queue,
+                    settings.worker_dead_letter_queue,
+                    stopping,
                 )
-            except Exception as error:
-                log.error("invalid_job", error_type=type(error).__name__)
+            )
+            tasks.create_task(publisher.run(stopping))
     finally:
         await client.aclose()
         log.info("worker_stopped")
+
+
+async def _consume_jobs(
+    client: Redis,
+    queue: str,
+    dead_letter_queue: str,
+    stopping: asyncio.Event,
+) -> None:
+    while not stopping.is_set():
+        item = await cast(
+            Awaitable[list[Any] | None],
+            client.brpop([queue], timeout=1),
+        )
+        if item is None:
+            continue
+        _, raw = item
+        try:
+            job = JobEnvelope.model_validate_json(raw)
+            # Job handlers are introduced per domain. Unknown/unwired jobs fail closed.
+            await cast(
+                Awaitable[int],
+                client.lpush(dead_letter_queue, job.model_dump_json()),
+            )
+            log.warning(
+                "job_unavailable",
+                job_type=job.job_type,
+                tenant_id=str(job.tenant_id),
+                idempotency_key=job.idempotency_key,
+            )
+        except Exception as error:
+            log.error("invalid_job", error_type=type(error).__name__)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { TeamoraLogo } from "@teamora/ui";
 import { apiRequest, ApiClientError } from "@/lib/api";
 import type { AuthResponse, OperatorPresence, Role } from "@/lib/types";
+import { RealtimeProvider, useRealtime } from "@/components/realtime-provider";
+import { broadcastRealtimeLogout } from "@/lib/realtime";
 
 const taskRoles: Role[] = [
   "tenant_owner",
@@ -220,124 +222,154 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
+  const authenticated = me.data;
+
   async function logout() {
     await apiRequest<void>("/auth/logout", { method: "POST" });
+    broadcastRealtimeLogout(
+      `kline:realtime:${authenticated.tenant.id}:${authenticated.user.id}:cursor`,
+    );
     router.replace("/login");
     router.refresh();
   }
 
   return (
-    <div className="app-frame">
-      <aside className="app-sidebar" aria-label="Навигация кабинета">
-        <Link className="sidebar-logo" href="/app">
-          <TeamoraLogo />
-        </Link>
-        <div className="sidebar-section-label">Кабинет</div>
-        <nav className="sidebar-nav">
-          {primaryNav
-            .filter(
-              (item) => !item.roles || item.roles.includes(me.data.user.role),
-            )
-            .map((item) => {
-              const active =
-                item.href === "/app"
-                  ? pathname === item.href
-                  : pathname.startsWith(item.href);
-              const Icon = item.icon;
-              return (
-                <Link
-                  aria-current={active ? "page" : undefined}
-                  className={`sidebar-link${active ? " active" : ""}`}
-                  href={item.href}
-                  key={item.href}
-                >
-                  <Icon aria-hidden="true" size={17} />
-                  <span>{item.label}</span>
-                </Link>
-              );
-            })}
-        </nav>
-        <div className="sidebar-section-label">Далее</div>
-        <div className="sidebar-nav">
-          {secondaryNav
-            .filter(
-              (item) => !item.roles || item.roles.includes(me.data.user.role),
-            )
-            .map((item) => {
-              const active = pathname.startsWith(item.href);
-              const Icon = item.icon;
-              return (
-                <Link
-                  aria-current={active ? "page" : undefined}
-                  className={`sidebar-link${active ? " active" : ""}`}
-                  href={item.href}
-                  key={item.href}
-                >
-                  <Icon aria-hidden="true" size={17} />
-                  <span>{item.label}</span>
-                </Link>
-              );
-            })}
-        </div>
-        <div className="sidebar-footer">DEV · Телефония отключена</div>
-      </aside>
-      <div className="app-main">
-        <header className="app-topbar row-between">
-          <div className="workspace-name">
-            <strong>{me.data.tenant.name}</strong>
-            <span>{me.data.tenant.slug}</span>
+    <RealtimeProvider tenantId={me.data.tenant.id} userId={me.data.user.id}>
+      <div className="app-frame">
+        <aside className="app-sidebar" aria-label="Навигация кабинета">
+          <Link className="sidebar-logo" href="/app">
+            <TeamoraLogo />
+          </Link>
+          <div className="sidebar-section-label">Кабинет</div>
+          <nav className="sidebar-nav">
+            {primaryNav
+              .filter(
+                (item) => !item.roles || item.roles.includes(me.data.user.role),
+              )
+              .map((item) => {
+                const active =
+                  item.href === "/app"
+                    ? pathname === item.href
+                    : pathname.startsWith(item.href);
+                const Icon = item.icon;
+                return (
+                  <Link
+                    aria-current={active ? "page" : undefined}
+                    className={`sidebar-link${active ? " active" : ""}`}
+                    href={item.href}
+                    key={item.href}
+                  >
+                    <Icon aria-hidden="true" size={17} />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+          </nav>
+          <div className="sidebar-section-label">Далее</div>
+          <div className="sidebar-nav">
+            {secondaryNav
+              .filter(
+                (item) => !item.roles || item.roles.includes(me.data.user.role),
+              )
+              .map((item) => {
+                const active = pathname.startsWith(item.href);
+                const Icon = item.icon;
+                return (
+                  <Link
+                    aria-current={active ? "page" : undefined}
+                    className={`sidebar-link${active ? " active" : ""}`}
+                    href={item.href}
+                    key={item.href}
+                  >
+                    <Icon aria-hidden="true" size={17} />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
           </div>
-          <div className="topbar-user">
-            {canUsePresence && (
-              <label className="topbar-presence">
-                <span>
-                  {presence.data?.effective_status === "busy"
-                    ? "Занят"
-                    : presence.data?.effective_status === "on_hold"
-                      ? "На удержании"
-                      : "Рабочий статус"}
-                </span>
-                <select
-                  aria-label="Рабочий статус"
-                  disabled={
-                    setStatus.isPending ||
-                    presence.data?.effective_status === "busy" ||
-                    presence.data?.effective_status === "on_hold"
-                  }
-                  onChange={(event) =>
-                    setStatus.mutate(
-                      event.target.value as OperatorPresence["manual_status"],
-                    )
-                  }
-                  value={presence.data?.manual_status ?? "offline"}
-                >
-                  <option value="available">Доступен</option>
-                  <option value="away">Отошёл</option>
-                  <option value="on_break">Перерыв</option>
-                  <option value="offline">Офлайн</option>
-                </select>
-              </label>
-            )}
-            <div>
-              <strong>{me.data.user.display_name}</strong>
-              <span>{roleLabels[me.data.user.role] ?? me.data.user.role}</span>
+          <div className="sidebar-footer">DEV · Телефония отключена</div>
+        </aside>
+        <div className="app-main">
+          <header className="app-topbar row-between">
+            <div className="workspace-name">
+              <strong>{me.data.tenant.name}</strong>
+              <span>{me.data.tenant.slug}</span>
             </div>
-            <ChevronDown aria-hidden="true" size={15} />
-            <button
-              aria-label="Выйти"
-              className="icon-button"
-              onClick={() => void logout()}
-              title="Выйти"
-              type="button"
-            >
-              <LogOut aria-hidden="true" size={17} />
-            </button>
-          </div>
-        </header>
-        <main className="app-content" id="main-content">
-          {children}
-        </main>
+            <div className="topbar-user">
+              <RealtimeIndicator />
+              {canUsePresence && (
+                <label className="topbar-presence">
+                  <span>
+                    {presence.data?.effective_status === "busy"
+                      ? "Занят"
+                      : presence.data?.effective_status === "on_hold"
+                        ? "На удержании"
+                        : "Рабочий статус"}
+                  </span>
+                  <select
+                    aria-label="Рабочий статус"
+                    disabled={
+                      setStatus.isPending ||
+                      presence.data?.effective_status === "busy" ||
+                      presence.data?.effective_status === "on_hold"
+                    }
+                    onChange={(event) =>
+                      setStatus.mutate(
+                        event.target.value as OperatorPresence["manual_status"],
+                      )
+                    }
+                    value={presence.data?.manual_status ?? "offline"}
+                  >
+                    <option value="available">Доступен</option>
+                    <option value="away">Отошёл</option>
+                    <option value="on_break">Перерыв</option>
+                    <option value="offline">Офлайн</option>
+                  </select>
+                </label>
+              )}
+              <div>
+                <strong>{me.data.user.display_name}</strong>
+                <span>
+                  {roleLabels[me.data.user.role] ?? me.data.user.role}
+                </span>
+              </div>
+              <ChevronDown aria-hidden="true" size={15} />
+              <button
+                aria-label="Выйти"
+                className="icon-button"
+                onClick={() => void logout()}
+                title="Выйти"
+                type="button"
+              >
+                <LogOut aria-hidden="true" size={17} />
+              </button>
+            </div>
+          </header>
+          <main className="app-content" id="main-content">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </RealtimeProvider>
+  );
+}
+
+function RealtimeIndicator() {
+  const realtime = useRealtime();
+  const label =
+    realtime.status === "connected"
+      ? "В реальном времени"
+      : realtime.status === "reconnecting"
+        ? "Переподключение"
+        : "Офлайн — резервное обновление";
+  return (
+    <span
+      className={`realtime-indicator realtime-${realtime.status}`}
+      data-testid="realtime-status"
+      title={label}
+    >
+      <span aria-hidden="true" className="realtime-dot" />
+      {label}
+    </span>
   );
 }

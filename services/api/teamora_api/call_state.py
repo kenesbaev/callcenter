@@ -18,6 +18,7 @@ from teamora_api.enums import (
 )
 from teamora_api.errors import ApiError
 from teamora_api.models import Call, CallEvent
+from teamora_api.realtime import enqueue_analytics_invalidation, enqueue_realtime_event
 
 TERMINAL_CALL_STATES = frozenset(
     {
@@ -362,6 +363,41 @@ class CallStateService:
                 "event_type": event_type,
             },
         )
+        await enqueue_realtime_event(
+            session,
+            tenant_id=call.tenant_id,
+            project_id=call.project_id,
+            event_type="call.state_changed",
+            aggregate_type="call",
+            aggregate_id=call.id,
+            aggregate_version=call.state_version,
+            payload={"status": target.value, "previous_status": previous.value},
+            occurred_at=timestamp,
+            correlation_id=correlation_id,
+        )
+        semantic_event = _semantic_realtime_event(previous, target, event_type)
+        if semantic_event is not None:
+            await enqueue_realtime_event(
+                session,
+                tenant_id=call.tenant_id,
+                project_id=call.project_id,
+                event_type=semantic_event,
+                aggregate_type="call",
+                aggregate_id=call.id,
+                aggregate_version=call.state_version,
+                payload={"status": target.value},
+                occurred_at=timestamp,
+                correlation_id=correlation_id,
+            )
+        await enqueue_analytics_invalidation(
+            session,
+            tenant_id=call.tenant_id,
+            project_id=call.project_id,
+            aggregate_type="call",
+            aggregate_id=call.id,
+            correlation_id=correlation_id,
+            reason="call_state_changed",
+        )
         return StateTransitionResult(target, call.state_version, True)
 
     async def ingest_provider_event(
@@ -568,6 +604,35 @@ class CallStateService:
             False,
             reason,
         )
+
+
+def _semantic_realtime_event(
+    previous: CallStatus,
+    target: CallStatus,
+    provider_event_type: str,
+) -> str | None:
+    if "reconcil" in provider_event_type:
+        return "call.reconciled"
+    if target == CallStatus.ACTIVE and previous == CallStatus.RINGING:
+        return "call.answered"
+    if target == CallStatus.ON_HOLD:
+        return "call.held"
+    if target == CallStatus.ACTIVE and previous == CallStatus.ON_HOLD:
+        return "call.resumed"
+    if target == CallStatus.TRANSFER_REQUESTED:
+        return "transfer.requested"
+    if target == CallStatus.TRANSFERRING:
+        return "transfer.started"
+    if target == CallStatus.TRANSFERRED:
+        return "transfer.completed"
+    if target == CallStatus.FAILED and previous in {
+        CallStatus.TRANSFER_REQUESTED,
+        CallStatus.TRANSFERRING,
+    }:
+        return "transfer.failed"
+    if target in TERMINAL_CALL_STATES:
+        return "call.ended"
+    return None
 
 
 def _utc(value: datetime) -> datetime:

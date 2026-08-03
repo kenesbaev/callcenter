@@ -194,14 +194,14 @@ class TelephonyService:
 
         command = TelephonyCommand(
             command=command_name,
-            tenantId=call.tenant_id,
-            projectId=project.id,
-            callId=call.id,
-            providerCallId=call.external_call_id,
-            commandId=uuid4(),
-            idempotencyKey=key,
+            tenant_id=call.tenant_id,
+            project_id=project.id,
+            call_id=call.id,
+            provider_call_id=call.external_call_id,
+            command_id=uuid4(),
+            idempotency_key=key,
             timestamp=datetime.now(UTC),
-            correlationId=correlation_id,
+            correlation_id=correlation_id,
             parameters={
                 **(parameters or {}),
                 "currentState": call.provider_state,

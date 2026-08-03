@@ -38,6 +38,7 @@ from teamora_api.models import (
     User,
 )
 from teamora_api.project_access import accessible_project_ids, resolve_project
+from teamora_api.realtime import enqueue_realtime_event
 from teamora_api.routers.calls import save_call_result_transactional, serialize_call
 from teamora_api.schemas.calls import CallRead
 from teamora_api.schemas.crm import DialerAssignment, DialerLeaseRequest, DialerTaskSummary
@@ -582,6 +583,17 @@ async def allocate_next_assignment(
         principal.user_id,
         source=source,
     )
+    await enqueue_realtime_event(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=project.id,
+        target_membership_id=principal.membership_id,
+        event_type="dialer.assignment_created",
+        aggregate_type="customer",
+        aggregate_id=customer.id,
+        payload={"source": source},
+        correlation_id=request.state.correlation_id,
+    )
     if commit:
         await session.commit()
     else:
@@ -809,6 +821,18 @@ async def complete_and_next(
         next_assignment=next_assignment,
         queue_complete=next_assignment is None,
     )
+    await enqueue_realtime_event(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=call.project_id,
+        target_membership_id=principal.membership_id,
+        event_type="dialer.call_completed",
+        aggregate_type="call",
+        aggregate_id=call.id,
+        aggregate_version=call.state_version,
+        payload={"queue_complete": next_assignment is None},
+        correlation_id=request.state.correlation_id,
+    )
     session.add(
         DialerCompletionSubmission(
             tenant_id=principal.tenant_id,
@@ -896,6 +920,17 @@ async def release_customer(
     customer.locked_until = None
     customer.lock_token = None
     customer.dialer_assignment_source = None
+    await enqueue_realtime_event(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=customer.project_id,
+        target_membership_id=principal.membership_id,
+        event_type="dialer.assignment_released",
+        aggregate_type="customer",
+        aggregate_id=customer.id,
+        payload={},
+        correlation_id=request.state.correlation_id,
+    )
     await write_audit(
         session,
         tenant_id=principal.tenant_id,

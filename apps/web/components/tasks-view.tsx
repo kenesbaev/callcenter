@@ -23,6 +23,7 @@ import { z } from "zod";
 import { Button, StatusBadge } from "@teamora/ui";
 import { QueryError, SectionSkeleton } from "@/components/query-state";
 import { ApiClientError, apiRequest, idempotencyKey } from "@/lib/api";
+import { useRealtime } from "@/components/realtime-provider";
 import type {
   AuthResponse,
   Page,
@@ -199,6 +200,7 @@ export function canCreateTasks(role: AuthResponse["user"]["role"] | undefined) {
 }
 
 export function TasksView() {
+  const realtime = useRealtime();
   const queryClient = useQueryClient();
   const [period, setPeriod] = useState<TaskPeriod>("");
   const [projectId, setProjectId] = useState("");
@@ -253,7 +255,7 @@ export function TasksView() {
     ],
     queryFn: () => apiRequest<Page<Task>>(`/tasks?${params.toString()}`),
     enabled: Boolean(projectId),
-    refetchInterval: 15_000,
+    refetchInterval: realtime.connected ? 120_000 : 30_000,
   });
 
   const activeProject = projects.data?.items.find(

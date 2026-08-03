@@ -1236,6 +1236,50 @@ button:disabled {
   font-size: 11px;
 }
 
+.realtime-indicator {
+  align-items: center;
+  border: 1px solid var(--tv-border);
+  border-radius: 999px;
+  color: var(--tv-text-muted);
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-weight: 700;
+  gap: 0.4rem;
+  line-height: 1;
+  padding: 0.5rem 0.65rem;
+  white-space: nowrap;
+}
+
+.realtime-dot {
+  background: #64748b;
+  border-radius: 999px;
+  height: 0.45rem;
+  width: 0.45rem;
+}
+
+.realtime-connected .realtime-dot {
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgb(22 163 74 / 12%);
+}
+
+.realtime-reconnecting .realtime-dot {
+  animation: realtime-pulse 1.2s ease-in-out infinite;
+  background: #f59e0b;
+}
+
+@keyframes realtime-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (max-width: 1200px) {
+  .realtime-indicator {
+    font-size: 0;
+    padding: 0.55rem;
+  }
+}
+
 .team-feedback {
   display: flex;
   align-items: center;

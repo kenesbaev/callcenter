@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     Numeric,
@@ -1530,6 +1531,62 @@ class OperatorPresence(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     session_key: Mapped[str] = mapped_column(String(80), nullable=False)
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RealtimeEvent(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    """Durable, tenant-scoped signal used by the realtime delivery pipeline.
+
+    The payload deliberately contains invalidation metadata only. PostgreSQL and
+    the REST API remain the canonical source for complete aggregate state.
+    """
+
+    __tablename__ = "realtime_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_realtime_events_tenant_project",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "target_membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_realtime_events_tenant_target_membership",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("cursor", name="uq_realtime_events_cursor"),
+        CheckConstraint(
+            "publish_status IN ('pending', 'published')",
+            name="publish_status_valid",
+        ),
+        CheckConstraint("publish_attempts >= 0", name="publish_attempts_non_negative"),
+        Index("ix_realtime_events_tenant_cursor", "tenant_id", "cursor"),
+        Index("ix_realtime_events_tenant_project_cursor", "tenant_id", "project_id", "cursor"),
+        Index(
+            "ix_realtime_events_tenant_target_cursor",
+            "tenant_id",
+            "target_membership_id",
+            "cursor",
+        ),
+        Index("ix_realtime_events_publish", "publish_status", "cursor"),
+        Index("ix_realtime_events_expiry", "expires_at"),
+    )
+
+    cursor: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False)
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    target_membership_id: Mapped[UUID | None] = mapped_column(index=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    aggregate_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    aggregate_id: Mapped[UUID] = mapped_column(nullable=False)
+    aggregate_version: Mapped[int | None] = mapped_column(Integer)
+    safe_payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    publish_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    publish_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(160))
+    causation_id: Mapped[UUID | None] = mapped_column()
 
 
 class OperatorQueue(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

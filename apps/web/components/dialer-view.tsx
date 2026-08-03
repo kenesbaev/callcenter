@@ -29,6 +29,7 @@ import type { CSSProperties } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button, StatusBadge } from "@teamora/ui";
+import { useRealtime } from "@/components/realtime-provider";
 import { ApiClientError, apiRequest, idempotencyKey } from "@/lib/api";
 import type {
   Call,
@@ -190,6 +191,7 @@ export function shouldHandleDialerShortcut(target: EventTarget | null) {
 }
 
 export function DialerView() {
+  const realtime = useRealtime();
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -228,7 +230,11 @@ export function DialerView() {
     queryFn: () => apiRequest<Call | null>("/calls/active"),
     refetchInterval: (query) => {
       const value = query.state.data;
-      return value && terminalCallStates.has(value.status) ? false : 5000;
+      return value && terminalCallStates.has(value.status)
+        ? false
+        : realtime.connected
+          ? 60_000
+          : 5_000;
     },
     structuralSharing: (current, incoming) =>
       newestCall(current as Call | null | undefined, incoming as Call | null),
@@ -237,7 +243,8 @@ export function DialerView() {
     queryKey: ["dialer", "call-state", activeCall.data?.id],
     queryFn: () => apiRequest<CallState>(`/calls/${activeCall.data?.id}/state`),
     enabled: Boolean(activeCall.data?.id),
-    refetchInterval: (query) => (query.state.data?.terminal ? false : 5000),
+    refetchInterval: (query) =>
+      query.state.data?.terminal ? false : realtime.connected ? 60_000 : 5_000,
   });
   const flow = useQuery({
     queryKey: ["dialer", "flow", activeCall.data?.id],

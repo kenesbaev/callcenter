@@ -8,6 +8,7 @@ import { Button, StatusBadge } from "@teamora/ui";
 import { apiRequest } from "@/lib/api";
 import type { CallbackTask, Page } from "@/lib/types";
 import { QueryError, SectionSkeleton } from "@/components/query-state";
+import { useRealtime } from "@/components/realtime-provider";
 
 const filters = [
   { value: "", label: "Все" },
@@ -23,6 +24,7 @@ function callbackTone(status: string): "primary" | "warning" | "success" {
 }
 
 export function CallbacksView() {
+  const realtime = useRealtime();
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState("pending");
   const tasks = useQuery({
@@ -31,7 +33,7 @@ export function CallbacksView() {
       apiRequest<Page<CallbackTask>>(
         `/callbacks?limit=100${filter ? `&status=${filter}` : ""}`,
       ),
-    refetchInterval: 15_000,
+    refetchInterval: realtime.connected ? 120_000 : 30_000,
   });
   const complete = useMutation({
     mutationFn: (taskId: string) =>

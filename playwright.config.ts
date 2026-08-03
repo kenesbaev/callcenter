@@ -85,7 +85,11 @@ export default defineConfig({
           url: baseURL,
           timeout: 120_000,
           reuseExistingServer: false,
-          env: { ...process.env, API_INTERNAL_URL: apiURL },
+          env: {
+            ...process.env,
+            API_INTERNAL_URL: apiURL,
+            NEXT_PUBLIC_REALTIME_URL: "ws://localhost:8100/api/v1/realtime/ws",
+          },
         },
       ],
 });

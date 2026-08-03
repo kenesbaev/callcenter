@@ -15,6 +15,7 @@ from teamora_api.db import engine
 from teamora_api.errors import ApiError, api_error_handler, validation_error_handler
 from teamora_api.logging import configure_logging
 from teamora_api.middleware import CorrelationMiddleware, CSRFMiddleware, LocalRateLimitMiddleware
+from teamora_api.realtime_hub import get_realtime_runtime
 from teamora_api.routers import (
     analytics,
     auth,
@@ -30,6 +31,7 @@ from teamora_api.routers import (
     operations,
     operators,
     projects,
+    realtime,
     simulator,
     tasks,
     team,
@@ -43,8 +45,13 @@ configure_logging(settings.log_level)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    yield
-    await engine.dispose()
+    realtime_runtime = get_realtime_runtime(settings)
+    await realtime_runtime.start()
+    try:
+        yield
+    finally:
+        await realtime_runtime.stop()
+        await engine.dispose()
 
 
 app = FastAPI(
@@ -76,6 +83,7 @@ app.include_router(health.router, prefix=api_v1_prefix)
 app.include_router(tenants.router, prefix=api_v1_prefix)
 app.include_router(operators.router, prefix=api_v1_prefix)
 app.include_router(projects.router, prefix=api_v1_prefix)
+app.include_router(realtime.router, prefix=api_v1_prefix)
 app.include_router(call_flows.router, prefix=api_v1_prefix)
 app.include_router(call_results.router, prefix=api_v1_prefix)
 app.include_router(knowledge.router, prefix=api_v1_prefix)
