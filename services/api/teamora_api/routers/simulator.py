@@ -111,6 +111,7 @@ async def send_message(
         customer_segment=segment_read(customer),
         assistant_segment=segment_read(assistant),
         tool_name=execution.tool_name,
+        tool_result=execution.safe_result or {},
         transfer_requested=transfer,
     )
 

@@ -59,6 +59,17 @@ TEAM_EVENT_TYPES = frozenset(
     }
 )
 ANALYTICS_EVENT_TYPES = frozenset({"analytics.invalidated"})
+KNOWLEDGE_EVENT_TYPES = frozenset(
+    {
+        "knowledge.document_uploaded",
+        "knowledge.document_processing",
+        "knowledge.document_ready",
+        "knowledge.document_failed",
+        "knowledge.document_needs_ocr",
+        "knowledge.revision_published",
+        "knowledge.index_updated",
+    }
+)
 REALTIME_EVENT_TYPES = (
     CALL_EVENT_TYPES
     | TRANSFER_EVENT_TYPES
@@ -66,6 +77,7 @@ REALTIME_EVENT_TYPES = (
     | TASK_EVENT_TYPES
     | TEAM_EVENT_TYPES
     | ANALYTICS_EVENT_TYPES
+    | KNOWLEDGE_EVENT_TYPES
 )
 
 _SENSITIVE_PAYLOAD_KEYS = frozenset(

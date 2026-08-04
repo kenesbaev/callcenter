@@ -94,6 +94,7 @@ def serialize_call(call: Call) -> CallRead:
         operator_user_id=call.operator_user_id,
         ai_operator_id=call.ai_operator_id,
         call_flow_version_id=call.call_flow_version_id,
+        knowledge_base_revision_id=call.knowledge_base_revision_id,
         direction=call.direction,
         caller_type=call.caller_type,
         provider=call.provider,
@@ -281,6 +282,13 @@ async def start_call(
         tenant_id=principal.tenant_id,
         project_id=customer.project_id,
     )
+    from teamora_api.knowledge_service import active_revision_for_project as active_knowledge_revision
+
+    knowledge_revision = await active_knowledge_revision(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=customer.project_id,
+    )
 
     callback: CallbackTask | None = None
     if payload.callback_task_id:
@@ -309,6 +317,7 @@ async def start_call(
         customer_id=customer.id,
         operator_user_id=principal.user_id,
         call_flow_version_id=call_flow_version.id if call_flow_version else None,
+        knowledge_base_revision_id=knowledge_revision.id if knowledge_revision else None,
         language=customer.preferred_language,
         provider=selection.provider.name,
         provider_state=TelephonyCallState.QUEUED.value,

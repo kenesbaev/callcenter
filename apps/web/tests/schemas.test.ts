@@ -13,12 +13,23 @@ describe("form schemas", () => {
     expect(result.success).toBe(false);
   });
 
-  it("does not expose Karakalpak as a normal knowledge option", () => {
-    const result = knowledgeSchema.safeParse({
+  it("accepts Karakalpak BCP 47 variants without rewriting Georgian", () => {
+    const karakalpak = knowledgeSchema.safeParse({
       title: "FAQ",
-      language: "kaa",
+      language: "KAA-Latn",
       content: "This text is long enough for validation.",
     });
-    expect(result.success).toBe(false);
+    const georgian = knowledgeSchema.safeParse({
+      title: "FAQ",
+      language: "ka",
+      content: "This text is long enough for validation.",
+    });
+    expect(karakalpak.success).toBe(true);
+    expect(georgian.success).toBe(true);
+    if (karakalpak.success && georgian.success) {
+      expect(karakalpak.data.language).toBe("kaa-latn");
+      expect(georgian.data.language).toBe("ka");
+      expect(georgian.data.language).not.toBe("kaa");
+    }
   });
 });

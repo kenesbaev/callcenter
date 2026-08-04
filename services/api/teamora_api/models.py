@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -693,30 +694,221 @@ class CallFlowVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class KnowledgeSource(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "knowledge_sources"
-    __table_args__ = (UniqueConstraint("tenant_id", "id", name="uq_knowledge_sources_tenant_id_id"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_knowledge_sources_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_knowledge_sources_tenant_id_id"),
+        UniqueConstraint("tenant_id", "project_id", "id", name="uq_knowledge_sources_tenant_project_id"),
+        Index("ix_knowledge_sources_tenant_project_archived", "tenant_id", "project_id", "archived_at"),
+        CheckConstraint("lock_version >= 1", name="knowledge_source_lock_version_positive"),
+    )
 
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
     source_type: Mapped[str] = mapped_column(String(40), default="text")
     status: Mapped[IntegrationStatus] = mapped_column(
         enum_type(IntegrationStatus), default=IntegrationStatus.CONFIGURED
     )
+    default_language_code: Mapped[str] = mapped_column(String(32), default="ru", nullable=False)
+    active_revision_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "knowledge_base_revisions.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_knowledge_sources_active_revision",
+        ),
+        index=True,
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class KnowledgeBaseRevision(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "knowledge_base_revisions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "knowledge_source_id"],
+            ["knowledge_sources.tenant_id", "knowledge_sources.project_id", "knowledge_sources.id"],
+            name="fk_kb_revisions_tenant_project_source",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("knowledge_source_id", "version", name="uq_kb_revisions_source_version"),
+        UniqueConstraint("tenant_id", "project_id", "id", name="uq_kb_revisions_tenant_project_id"),
+        CheckConstraint("status IN ('draft', 'published', 'archived')", name="kb_revision_status_valid"),
+        CheckConstraint("lock_version >= 1", name="kb_revision_lock_version_positive"),
+        CheckConstraint("embedding_dimension > 0", name="kb_revision_embedding_dimension_positive"),
+        Index(
+            "uq_kb_revisions_single_draft",
+            "tenant_id",
+            "knowledge_source_id",
+            unique=True,
+            postgresql_where=text("status = 'draft'"),
+        ),
+        Index(
+            "ix_kb_revisions_source_status_version",
+            "tenant_id",
+            "knowledge_source_id",
+            "status",
+            "version",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    knowledge_source_id: Mapped[UUID] = mapped_column(index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_from_revision_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("knowledge_base_revisions.id", ondelete="SET NULL"), index=True
+    )
+    embedding_provider: Mapped[str] = mapped_column(String(80), default="mock", nullable=False)
+    embedding_model: Mapped[str] = mapped_column(
+        String(120), default="kline-deterministic-v1", nullable=False
+    )
+    embedding_dimension: Mapped[int] = mapped_column(Integer, default=64, nullable=False)
+    index_version: Mapped[str] = mapped_column(String(120), default="kb-index-v1", nullable=False)
+    chunking_config: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class KnowledgeDocument(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "knowledge_documents"
 
-    source_id: Mapped[UUID] = mapped_column(
-        ForeignKey("knowledge_sources.id", ondelete="CASCADE"), index=True
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_knowledge_documents_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id"],
+            ["knowledge_sources.tenant_id", "knowledge_sources.id"],
+            name="fk_knowledge_documents_tenant_source",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "project_id", "id", name="uq_knowledge_documents_tenant_project_id"),
+        CheckConstraint("lock_version >= 1", name="knowledge_document_lock_version_positive"),
+        Index("ix_knowledge_documents_source_archived", "tenant_id", "source_id", "archived_at"),
     )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    source_id: Mapped[UUID] = mapped_column(index=True)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
     language: Mapped[LanguageCode] = mapped_column(enum_type(LanguageCode), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class KnowledgeDocumentVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "knowledge_document_versions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "revision_id"],
+            [
+                "knowledge_base_revisions.tenant_id",
+                "knowledge_base_revisions.project_id",
+                "knowledge_base_revisions.id",
+            ],
+            name="fk_knowledge_document_versions_tenant_revision",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "document_id"],
+            ["knowledge_documents.tenant_id", "knowledge_documents.project_id", "knowledge_documents.id"],
+            name="fk_knowledge_document_versions_tenant_document",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("document_id", "version", name="uq_knowledge_document_versions_document_version"),
+        UniqueConstraint("tenant_id", "project_id", "id", name="uq_kdv_tenant_project_id"),
+        CheckConstraint(
+            "status IN ('uploaded','queued','extracting','chunking','embedding','ready',"
+            "'failed','needs_ocr','archived')",
+            name="knowledge_document_version_status_valid",
+        ),
+        CheckConstraint("lock_version >= 1", name="knowledge_document_version_lock_version_positive"),
+        Index("ix_kdv_revision_status", "tenant_id", "revision_id", "status"),
+        Index("ix_kdv_checksum_scope", "tenant_id", "knowledge_source_id", "checksum_sha256"),
+        Index(
+            "uq_kdv_revision_active_document",
+            "tenant_id",
+            "revision_id",
+            "document_id",
+            unique=True,
+            postgresql_where=text("status <> 'archived'"),
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    knowledge_source_id: Mapped[UUID] = mapped_column(index=True)
+    revision_id: Mapped[UUID] = mapped_column(index=True)
+    document_id: Mapped[UUID] = mapped_column(index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="uploaded", nullable=False)
+    title_snapshot: Mapped[str] = mapped_column(String(240), nullable=False)
+    language_code: Mapped[str] = mapped_column(String(32), default="ru", nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    object_key: Mapped[str | None] = mapped_column(String(640))
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_length: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    extracted_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    extraction_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    safe_error_message: Mapped[str | None] = mapped_column(String(500))
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    extraction_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    chunking_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    embedding_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class KnowledgeChunk(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "revision_id"],
+            [
+                "knowledge_base_revisions.tenant_id",
+                "knowledge_base_revisions.project_id",
+                "knowledge_base_revisions.id",
+            ],
+            name="fk_knowledge_chunks_tenant_revision",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "document_version_id"],
+            [
+                "knowledge_document_versions.tenant_id",
+                "knowledge_document_versions.project_id",
+                "knowledge_document_versions.id",
+            ],
+            name="fk_knowledge_chunks_tenant_document_version",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_knowledge_chunks_retrieval_scope",
+            "tenant_id",
+            "project_id",
+            "revision_id",
+            "language_code",
+            "embedding_status",
+        ),
+    )
 
     document_id: Mapped[UUID] = mapped_column(
         ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True
@@ -725,6 +917,96 @@ class KnowledgeChunk(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
     embedding_ref: Mapped[str | None] = mapped_column(String(255))
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    revision_id: Mapped[UUID | None] = mapped_column(index=True)
+    document_version_id: Mapped[UUID | None] = mapped_column(index=True)
+    language_code: Mapped[str] = mapped_column(String(32), default="ru", nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    section: Mapped[str | None] = mapped_column(String(500))
+    normalized_content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    content_checksum: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    character_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(VECTOR())
+    embedding_status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    embedding_provider: Mapped[str | None] = mapped_column(String(80))
+    embedding_model: Mapped[str | None] = mapped_column(String(120))
+    embedding_dimension: Mapped[int | None] = mapped_column(Integer)
+    index_version: Mapped[str | None] = mapped_column(String(120))
+
+
+class DocumentIngestionJob(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "document_ingestion_jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "document_version_id"],
+            [
+                "knowledge_document_versions.tenant_id",
+                "knowledge_document_versions.project_id",
+                "knowledge_document_versions.id",
+            ],
+            name="fk_document_ingestion_jobs_tenant_version",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "document_version_id", name="uq_ingestion_job_document_version"),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_ingestion_job_idempotency"),
+        CheckConstraint(
+            "status IN ('pending','processing','succeeded','failed','cancelled')",
+            name="ingestion_job_status_valid",
+        ),
+        CheckConstraint("attempts >= 0", name="ingestion_job_attempts_non_negative"),
+        Index("ix_ingestion_jobs_claim", "status", "next_attempt_at", "lease_expires_at"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    document_version_id: Mapped[UUID] = mapped_column(index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    stage: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    lease_token: Mapped[UUID | None] = mapped_column(index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class KnowledgeRetrievalExecution(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "knowledge_retrieval_executions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "revision_id"],
+            [
+                "knowledge_base_revisions.tenant_id",
+                "knowledge_base_revisions.project_id",
+                "knowledge_base_revisions.id",
+            ],
+            name="fk_knowledge_retrieval_tenant_revision",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_knowledge_retrieval_idempotency"),
+        Index("ix_knowledge_retrieval_revision_created", "tenant_id", "revision_id", "created_at"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    revision_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID | None] = mapped_column(ForeignKey("calls.id", ondelete="SET NULL"), index=True)
+    query_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    masked_query: Mapped[str] = mapped_column(String(1000), nullable=False)
+    language_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    chunk_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    citations: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list, nullable=False)
+    scores: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list, nullable=False)
+    usage: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    index_version: Mapped[str] = mapped_column(String(120), nullable=False)
+    no_match: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
 
 
 class KnowledgeSyncJob(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -979,6 +1261,7 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
         ForeignKey("ai_operator_versions.id", ondelete="SET NULL")
     )
     call_flow_version_id: Mapped[UUID | None] = mapped_column(index=True)
+    knowledge_base_revision_id: Mapped[UUID | None] = mapped_column(index=True)
     language: Mapped[LanguageCode | None] = mapped_column(enum_type(LanguageCode))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ringing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1036,6 +1319,16 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
                 "call_flow_versions.id",
             ],
             name="fk_calls_tenant_project_call_flow_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "knowledge_base_revision_id"],
+            [
+                "knowledge_base_revisions.tenant_id",
+                "knowledge_base_revisions.project_id",
+                "knowledge_base_revisions.id",
+            ],
+            name="fk_calls_knowledge_base_revision",
             ondelete="RESTRICT",
         ),
         UniqueConstraint("tenant_id", "external_call_id"),

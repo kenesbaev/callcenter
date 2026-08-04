@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 
 from teamora_worker.config import get_settings
 from teamora_worker.jobs import JobEnvelope
+from teamora_worker.knowledge_ingestion import KnowledgeIngestionProcessor
 from teamora_worker.realtime_publisher import RealtimePublisher
 
 structlog.configure(
@@ -38,6 +39,7 @@ async def run() -> None:
         except NotImplementedError:
             signal.signal(name, request_stop)
     publisher = RealtimePublisher(settings, client)
+    knowledge = KnowledgeIngestionProcessor(settings)
     log.info("worker_started", queue=settings.worker_queue)
     try:
         async with asyncio.TaskGroup() as tasks:
@@ -50,6 +52,7 @@ async def run() -> None:
                 )
             )
             tasks.create_task(publisher.run(stopping))
+            tasks.create_task(knowledge.run(stopping))
     finally:
         await client.aclose()
         log.info("worker_stopped")

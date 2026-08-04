@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from teamora_api.call_events import append_call_event
 from teamora_api.call_flow_service import active_version_for_project
 from teamora_api.call_state import CallStateService
-from teamora_api.domain.knowledge import search_knowledge
+from teamora_api.config import get_settings
 from teamora_api.enums import (
     CallChannel,
     CallDirection,
@@ -27,6 +27,8 @@ from teamora_api.enums import (
     TransferStatus,
 )
 from teamora_api.errors import ApiError
+from teamora_api.knowledge_service import active_revision_for_project as active_knowledge_revision
+from teamora_api.knowledge_service import hybrid_retrieve
 from teamora_api.models import (
     AiOperator,
     AiOperatorVersion,
@@ -183,6 +185,11 @@ async def create_simulated_call(
         tenant_id=tenant_id,
         project_id=operator.project_id,
     )
+    knowledge_revision = await active_knowledge_revision(
+        session,
+        tenant_id=tenant_id,
+        project_id=operator.project_id,
+    )
     call = Call(
         tenant_id=tenant_id,
         project_id=operator.project_id,
@@ -195,6 +202,7 @@ async def create_simulated_call(
         ai_operator_id=ai_operator_id,
         ai_operator_version_id=version.id,
         call_flow_version_id=call_flow_version.id if call_flow_version else None,
+        knowledge_base_revision_id=knowledge_revision.id if knowledge_revision else None,
         language=language,
         started_at=now,
         provider="mock",
@@ -278,16 +286,34 @@ async def add_simulated_message(
     session.add(customer_segment)
 
     transfer_requested = asks_for_human(text)
-    matches = (
-        []
-        if transfer_requested
-        else await search_knowledge(session, tenant_id=tenant_id, language=language, query=text)
+    retrieval = (
+        None
+        if transfer_requested or call.knowledge_base_revision_id is None
+        else await hybrid_retrieve(
+            session,
+            settings=get_settings(),
+            tenant_id=tenant_id,
+            project_id=call.project_id,
+            query=text,
+            language=language.value,
+            revision_id=call.knowledge_base_revision_id,
+            call_id=call.id,
+            top_k=3,
+            idempotency_key=f"retrieval:{execution_key}",
+        )
     )
+    matches = retrieval.hits if retrieval else []
     tool_name = "request_human_operator" if transfer_requested or not matches else "search_knowledge"
     safe_result: dict[str, object]
     if matches:
-        answer = matches[0].content
-        safe_result = {"matched_document_ids": [str(document.id) for document in matches]}
+        answer = matches[0].excerpt
+        safe_result = {
+            "deterministic_retrieval": True,
+            "knowledge_revision_id": str(retrieval.revision_id) if retrieval else None,
+            "matched_chunk_ids": [str(hit.chunk_id) for hit in matches],
+            "citations": [hit.citation() for hit in matches],
+            "scores": [round(hit.combined_score, 6) for hit in matches],
+        }
     else:
         transfer_requested = True
         answer = HANDOFF_PHRASES[language] if asks_for_human(text) else UNKNOWN_PHRASES[language]

@@ -91,6 +91,76 @@ export async function apiRequest<T>(
   }
 }
 
+export function apiUpload<T>(
+  path: string,
+  body: FormData,
+  extraHeaders: Record<string, string>,
+  onProgress: (percentage: number) => void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `/api/v1${path}`);
+    request.withCredentials = true;
+    request.timeout = Math.max(API_REQUEST_TIMEOUT_MS, 60_000);
+    const csrf = cookie("tv_csrf");
+    if (csrf) request.setRequestHeader("X-CSRF-Token", csrf);
+    for (const [name, value] of Object.entries(extraHeaders)) {
+      request.setRequestHeader(name, value);
+    }
+    request.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+    });
+    request.addEventListener("load", () => {
+      const response = (() => {
+        try {
+          return JSON.parse(request.responseText) as {
+            error?: {
+              code?: string;
+              message?: string;
+              correlation_id?: string;
+            };
+          };
+        } catch {
+          return null;
+        }
+      })();
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(100);
+        resolve(response as T);
+        return;
+      }
+      reject(
+        new ApiClientError(
+          request.status,
+          response?.error?.code ?? "upload_failed",
+          response?.error?.message ?? "Не удалось загрузить файл.",
+          response?.error?.correlation_id,
+        ),
+      );
+    });
+    request.addEventListener("error", () =>
+      reject(
+        new ApiClientError(
+          0,
+          "network_unavailable",
+          "Не удалось связаться с сервером.",
+        ),
+      ),
+    );
+    request.addEventListener("timeout", () =>
+      reject(
+        new ApiClientError(
+          0,
+          "request_timeout",
+          "Загрузка не завершилась вовремя.",
+        ),
+      ),
+    );
+    request.send(body);
+  });
+}
+
 export function idempotencyKey(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }

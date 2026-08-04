@@ -379,6 +379,10 @@ def main() -> int:
             "CORS_ORIGINS": (
                 "http://localhost:3100,http://localhost:3000,http://localhost:8080"
             ),
+            "MINIO_ENDPOINT": "http://127.0.0.1:9000",
+            "KNOWLEDGE_EMBEDDING_PROVIDER": "mock",
+            "KNOWLEDGE_EMBEDDING_MODEL": "kline-deterministic-v1",
+            "KNOWLEDGE_EMBEDDING_DIMENSION": "64",
         }
     )
 
@@ -406,6 +410,7 @@ def main() -> int:
     runtime_directory = Path(tempfile.mkdtemp(prefix="e2e-runtime-", dir=runtime_root))
     api_log = runtime_directory / "api.log"
     web_log = runtime_directory / "web.log"
+    worker_log = runtime_directory / "worker.log"
     supervisor = ProcessSupervisor(shutdown_timeout)
     result = 1
 
@@ -434,6 +439,7 @@ def main() -> int:
         with (
             api_log.open("wb") as api_output,
             web_log.open("wb") as web_output,
+            worker_log.open("wb") as worker_output,
         ):
             api_process = supervisor.start(
                 "api",
@@ -482,6 +488,16 @@ def main() -> int:
                 stdout=web_output,
                 stderr=subprocess.STDOUT,
             )
+            worker_process = supervisor.start(
+                "worker",
+                [sys.executable, "-m", "teamora_worker.main"],
+                environment={
+                    **environment,
+                    "PYTHONPATH": str(REPOSITORY_ROOT / "services" / "worker"),
+                },
+                stdout=worker_output,
+                stderr=subprocess.STDOUT,
+            )
             wait_for_http(
                 "http://127.0.0.1:8100/api/v1/health/ready",
                 timeout_seconds=server_timeout,
@@ -492,6 +508,10 @@ def main() -> int:
                 timeout_seconds=server_timeout,
                 watched_processes=[("web", web_process)],
             )
+            if worker_process.poll() is not None:
+                raise RuntimeError(
+                    f"E2E worker exited before tests with code {worker_process.returncode}"
+                )
 
             playwright = supervisor.start(
                 "playwright",
@@ -522,10 +542,12 @@ def main() -> int:
             if result != 0:
                 print_log_tail(api_log)
                 print_log_tail(web_log)
+                print_log_tail(worker_log)
     except (RuntimeError, subprocess.SubprocessError) as exc:
         print(f"E2E runner failed: {exc}", file=sys.stderr, flush=True)
         print_log_tail(api_log)
         print_log_tail(web_log)
+        print_log_tail(worker_log)
         result = 1
     finally:
         supervisor.shutdown()

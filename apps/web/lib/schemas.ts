@@ -35,7 +35,11 @@ export const operatorSchema = z.object({
 
 export const knowledgeSchema = z.object({
   title: z.string().min(2).max(240),
-  language: z.enum(["ru", "en", "uz"]),
+  language: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/),
   content: z.string().min(20).max(100_000),
 });
 

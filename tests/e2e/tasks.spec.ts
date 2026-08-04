@@ -36,6 +36,7 @@ test("владелец создаёт, начинает и завершает о
   await expect(page.getByRole("heading", { name: "Задачи" })).toBeVisible();
   await page.getByRole("button", { name: "Создать задачу" }).click();
   const form = page.getByRole("dialog", { name: "Создание задачи" });
+  await expect(form.getByLabel("Клиент")).toBeEnabled({ timeout: 15_000 });
   await form.getByLabel("Клиент").selectOption(customerId);
   await form.getByLabel("Тип").selectOption("manual");
   await form.getByLabel("Приоритет").selectOption("high");

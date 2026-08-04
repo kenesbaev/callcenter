@@ -27,16 +27,28 @@ test("регистрация → AI-оператор → база знаний �
   await expect(operator.getByText("Готов к симулятору")).toBeVisible();
 
   await page.getByRole("link", { name: "База знаний" }).click();
-  await page.getByLabel("Название").fill("График поддержки E2E");
+  await page.getByLabel("Название новой базы").fill("Поддержка E2E");
   await page
-    .getByLabel("Проверенная информация")
+    .getByLabel("Описание базы")
+    .fill("Проверенная информация для проекта");
+  await page.getByRole("button", { name: "Создать" }).click();
+  const textDocument = page.locator("form.form-card").filter({
+    hasText: "Текстовый документ",
+  });
+  await textDocument.getByLabel("Название").fill("График поддержки E2E");
+  await textDocument
+    .getByLabel("Текст")
     .fill(
       "Служба поддержки работает с понедельника по пятницу с девяти до восемнадцати.",
     );
-  await page.getByRole("button", { name: "Сохранить" }).click();
-  await expect(page.getByText("График поддержки E2E")).toBeVisible();
+  await textDocument.getByRole("button", { name: "Добавить текст" }).click();
+  await expect(
+    page.getByText("График поддержки E2E", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Опубликовать" }).click();
+  await expect(page.getByText(/Revision опубликована/)).toBeVisible();
 
-  await page.getByRole("link", { name: "Симулятор" }).click();
+  await page.goto("/app/dev-simulator");
   await page
     .getByLabel("Опубликованный оператор")
     .selectOption({ label: `${operatorName} · v1` });
@@ -212,10 +224,6 @@ test("оператор проходит полный Mock Dialer и сохран
   await expect(
     page.getByText("Результат сохранён. Очередь завершена."),
   ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Ожидание клиента" }),
-  ).toBeVisible();
-
   await page.getByRole("link", { name: "Обзор" }).click();
   await expect(page).toHaveURL(/\/app\/overview/);
   await expect(

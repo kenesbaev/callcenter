@@ -59,6 +59,7 @@ class CallRead(BaseModel):
     operator_user_id: UUID | None
     ai_operator_id: UUID | None
     call_flow_version_id: UUID | None
+    knowledge_base_revision_id: UUID | None
     direction: CallDirection
     caller_type: CallerType
     provider: str
@@ -160,6 +161,7 @@ class SimulatorMessageResponse(BaseModel):
     customer_segment: TranscriptSegmentRead
     assistant_segment: TranscriptSegmentRead
     tool_name: str
+    tool_result: dict[str, object]
     transfer_requested: bool
 
 

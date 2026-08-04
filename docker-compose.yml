@@ -9,7 +9,7 @@ x-service-defaults: &service-defaults
 services:
   postgres:
     <<: *service-defaults
-    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    image: pgvector/pgvector:0.8.2-pg16-bookworm@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
@@ -128,14 +128,18 @@ services:
     build:
       context: .
       dockerfile: services/worker/Dockerfile
+    mem_limit: ${WORKER_MEMORY_LIMIT:-768m}
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: http://minio:9000
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-m", "teamora_worker.healthcheck"]
@@ -144,6 +148,7 @@ services:
       retries: 20
     networks:
       - data
+      - app
       - egress
 
   voice-gateway:

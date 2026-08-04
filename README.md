@@ -239,6 +239,20 @@ provider event rules, migration mapping and live verification boundary. Run
 `py -3.12 scripts/run_call_state_migration_test.py` for the isolated
 upgrade/downgrade preservation check.
 
+## Versioned knowledge and deterministic RAG
+
+`/app/knowledge` manages project-scoped draft and immutable published knowledge-base
+revisions, safe TXT/Markdown/PDF/DOCX ingestion through the existing Worker and private
+MinIO, deterministic chunking, pgvector plus PostgreSQL lexical retrieval, exact
+citations, and pinned revisions for calls and Simulator sessions. Scanned PDFs are
+reported as `needs_ocr`; no OCR, generative LLM, or external embedding request is made
+in this stage.
+
+See [docs/KNOWLEDGE_RAG.md](docs/KNOWLEDGE_RAG.md) for the lifecycle, upload security,
+ranking formula, language rules, RBAC/RLS boundary, environment variable names, and
+live-verification limitations. Run `py -3.12 scripts/run_knowledge_migration_test.py`
+for the isolated upgrade/downgrade preservation check.
+
 ## Language readiness
 
 | Language           | Status            | Rule                                                                       |

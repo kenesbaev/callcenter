@@ -37,6 +37,19 @@ class Settings(BaseSettings):
     minio_endpoint: str = "http://localhost:9000"
     minio_bucket: str = "teamora-private"
     minio_region: str = "us-east-1"
+    minio_root_user: str = ""
+    minio_root_password: SecretStr = Field(default=SecretStr(""))
+    knowledge_max_file_bytes: int = Field(default=25 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
+    knowledge_max_pdf_pages: int = Field(default=500, ge=1, le=2000)
+    knowledge_max_extracted_chars: int = Field(default=5_000_000, ge=1000, le=20_000_000)
+    knowledge_max_chunks: int = Field(default=10_000, ge=1, le=50_000)
+    knowledge_max_docx_expanded_bytes: int = Field(default=200 * 1024 * 1024, ge=1024, le=1024 * 1024 * 1024)
+    knowledge_max_zip_ratio: int = Field(default=100, ge=2, le=1000)
+    knowledge_chunk_size_chars: int = Field(default=1_800, ge=200, le=10_000)
+    knowledge_chunk_overlap_chars: int = Field(default=220, ge=0, le=2_000)
+    knowledge_embedding_provider: str = "mock"
+    knowledge_embedding_model: str = "kline-deterministic-v1"
+    knowledge_embedding_dimension: int = Field(default=64, ge=8, le=4096)
 
     jwt_signing_key: SecretStr = Field(default=SecretStr("development-only-signing-key-change-me"))
     local_secret_encryption_key: SecretStr | None = None

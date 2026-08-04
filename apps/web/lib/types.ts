@@ -40,10 +40,108 @@ export type AiOperator = {
 export type KnowledgeDocument = {
   id: string;
   source_id: string;
+  project_id: string | null;
   title: string;
-  language: "ru" | "en" | "uz" | "kaa";
+  language: string;
   content: string;
+  archived_at: string | null;
   created_at: string;
+  version: KnowledgeDocumentVersion | null;
+};
+
+export type KnowledgeDocumentVersion = {
+  id: string;
+  document_id: string;
+  revision_id: string;
+  version: number;
+  status:
+    | "uploaded"
+    | "queued"
+    | "extracting"
+    | "chunking"
+    | "embedding"
+    | "ready"
+    | "failed"
+    | "needs_ocr"
+    | "archived";
+  title_snapshot: string;
+  language_code: string;
+  original_filename: string;
+  has_original: boolean;
+  file_type: "txt" | "md" | "pdf" | "docx";
+  content_type: string;
+  checksum_sha256: string;
+  content_length: number;
+  page_count: number | null;
+  chunk_count: number;
+  safe_error_code: string | null;
+  safe_error_message: string | null;
+  lock_version: number;
+  created_at: string;
+};
+
+export type KnowledgeRevision = {
+  id: string;
+  knowledge_base_id: string;
+  project_id: string;
+  version: number;
+  status: "draft" | "published" | "archived";
+  lock_version: number;
+  created_from_revision_id: string | null;
+  embedding_provider: string;
+  embedding_model: string;
+  embedding_dimension: number;
+  embedding_status: "development" | "configured" | "verified" | "unavailable";
+  index_version: string;
+  published_at: string | null;
+  created_at: string;
+};
+
+export type KnowledgeBase = {
+  id: string;
+  project_id: string | null;
+  name: string;
+  description: string;
+  default_language_code: string;
+  active_revision_id: string | null;
+  archived_at: string | null;
+  lock_version: number;
+  draft_revision: KnowledgeRevision | null;
+  published_revision: KnowledgeRevision | null;
+  document_count: number;
+  created_at: string;
+};
+
+export type KnowledgeRetrievalHit = {
+  chunk_id: string;
+  document_id: string;
+  document_version_id: string;
+  document_version: number;
+  title: string;
+  language: string;
+  page: number | null;
+  section: string | null;
+  excerpt: string;
+  lexical_score: number;
+  vector_score: number;
+  combined_score: number;
+  revision_id: string;
+};
+
+export type KnowledgeRetrieval = {
+  revision_id: string;
+  hits: KnowledgeRetrievalHit[];
+  no_match: boolean;
+  provider: string;
+  model: string;
+  provider_status: string;
+  index_version: string;
+  notice: string;
+  usage: {
+    input_items: number;
+    input_characters: number;
+    estimated_tokens: number;
+  };
 };
 
 export type TranscriptSegment = {
@@ -80,6 +178,7 @@ export type Call = {
   operator_user_id: string | null;
   ai_operator_id: string | null;
   call_flow_version_id?: string | null;
+  knowledge_base_revision_id?: string | null;
   direction: "inbound" | "outbound";
   caller_type: "human_operator" | "ai_agent";
   provider: string;

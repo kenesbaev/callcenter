@@ -57,6 +57,7 @@ const queryGroups: Array<{ prefix: string; keys: string[][] }> = [
   },
   { prefix: "operator.", keys: [["team"], ["calls"], ["live-calls"]] },
   { prefix: "team.", keys: [["team"], ["auth"]] },
+  { prefix: "knowledge.", keys: [["knowledge"]] },
 ];
 
 const terminalCallStates = new Set<CallStatus>([
@@ -115,6 +116,7 @@ export function RealtimeProvider({
       ["team"],
       ["analytics"],
       ["conversations"],
+      ["knowledge"],
     ]) {
       void queryClient.invalidateQueries({ queryKey: key });
     }

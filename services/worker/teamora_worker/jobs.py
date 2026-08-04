@@ -12,14 +12,25 @@ from pydantic import BaseModel, Field
 class JobEnvelope(BaseModel):
     tenant_id: UUID
     job_type: Literal[
-        "call_summary", "crm_sync", "retention_cleanup", "usage_finalize", "notification"
+        "call_summary",
+        "crm_sync",
+        "retention_cleanup",
+        "usage_finalize",
+        "notification",
+        "knowledge_ingestion",
     ]
     idempotency_key: str = Field(min_length=8, max_length=160)
     safe_payload: dict[str, Any] = Field(default_factory=dict)
     attempt: int = Field(default=0, ge=0, le=10)
 
 
-SAFE_RETRY_JOB_TYPES = {"crm_sync", "retention_cleanup", "usage_finalize", "notification"}
+SAFE_RETRY_JOB_TYPES = {
+    "crm_sync",
+    "retention_cleanup",
+    "usage_finalize",
+    "notification",
+    "knowledge_ingestion",
+}
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, Square } from "lucide-react";
+import { AlertTriangle, ArrowRight, BookOpen, Square } from "lucide-react";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Button, StatusBadge } from "@teamora/ui";
@@ -18,17 +18,34 @@ type SimulatorMessage = {
   customer_segment: TranscriptSegment;
   assistant_segment: TranscriptSegment;
   tool_name: string;
+  tool_result: {
+    deterministic_retrieval?: boolean;
+    knowledge_revision_id?: string | null;
+    citations?: Array<{
+      title?: string;
+      document_version?: number;
+      page?: number | null;
+      section?: string | null;
+      chunk_id?: string;
+    }>;
+    scores?: number[];
+    reason?: string;
+  };
   transfer_requested: boolean;
 };
 
 export function SimulatorView() {
   const queryClient = useQueryClient();
   const [operatorId, setOperatorId] = useState("");
+  const [language, setLanguage] = useState("ru");
   const [customerName, setCustomerName] = useState("");
   const [phone, setPhone] = useState("+998901234567");
   const [message, setMessage] = useState("");
   const [call, setCall] = useState<CallDetail | null>(null);
   const [lastTool, setLastTool] = useState("");
+  const [lastToolResult, setLastToolResult] = useState<
+    SimulatorMessage["tool_result"] | null
+  >(null);
   const [error, setError] = useState("");
   const operators = useQuery({
     queryKey: ["operators"],
@@ -46,7 +63,7 @@ export function SimulatorView() {
         headers: { "Idempotency-Key": idempotencyKey("sim-start") },
         body: JSON.stringify({
           ai_operator_id: operatorId,
-          language: "ru",
+          language,
           customer_name: customerName || null,
           customer_phone: phone,
         }),
@@ -55,6 +72,7 @@ export function SimulatorView() {
       setCall(data);
       setError("");
       setLastTool("");
+      setLastToolResult(null);
     },
     onError: handleError,
   });
@@ -80,6 +98,7 @@ export function SimulatorView() {
           : current,
       );
       setLastTool(data.tool_name);
+      setLastToolResult(data.tool_result);
       setMessage("");
       setError("");
     },
@@ -117,6 +136,7 @@ export function SimulatorView() {
   }
 
   const canStart = Boolean(operatorId && /^\+[1-9][0-9]{7,14}$/.test(phone));
+  const selectedOperator = published.find((item) => item.id === operatorId);
   return (
     <>
       <div className="page-heading">
@@ -138,7 +158,21 @@ export function SimulatorView() {
               <select
                 disabled={Boolean(call && call.status !== "completed")}
                 id="sim-operator"
-                onChange={(event) => setOperatorId(event.target.value)}
+                onChange={(event) => {
+                  const nextId = event.target.value;
+                  setOperatorId(nextId);
+                  const nextOperator = published.find(
+                    (item) => item.id === nextId,
+                  );
+                  if (
+                    nextOperator &&
+                    !nextOperator.version.allowed_languages.includes(language)
+                  ) {
+                    setLanguage(
+                      nextOperator.version.allowed_languages[0] ?? "ru",
+                    );
+                  }
+                }}
                 value={operatorId}
               >
                 <option value="">Выберите оператора</option>
@@ -147,6 +181,26 @@ export function SimulatorView() {
                     {operator.name} · v{operator.version.version}
                   </option>
                 ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="sim-language">Язык</label>
+              <select
+                disabled={
+                  !selectedOperator ||
+                  Boolean(call && call.status !== "completed")
+                }
+                id="sim-language"
+                onChange={(event) => setLanguage(event.target.value)}
+                value={language}
+              >
+                {(selectedOperator?.version.allowed_languages ?? ["ru"]).map(
+                  (item) => (
+                    <option key={item} value={item}>
+                      {item.toUpperCase()}
+                    </option>
+                  ),
+                )}
               </select>
             </div>
             {!operators.isPending && published.length === 0 && (
@@ -224,6 +278,14 @@ export function SimulatorView() {
                 <span>Последний инструмент</span>
                 <strong>{lastTool || "Нет"}</strong>
               </div>
+              <div>
+                <span>Knowledge revision</span>
+                <strong>
+                  {call.knowledge_base_revision_id
+                    ? call.knowledge_base_revision_id.slice(0, 8)
+                    : "Не зафиксирована"}
+                </strong>
+              </div>
             </div>
           )}
         </section>
@@ -277,6 +339,31 @@ export function SimulatorView() {
                 <div className="form-warning">
                   Запрошен перевод. Очередь операторов пока не подключена.
                 </div>
+              )}
+              {lastToolResult?.deterministic_retrieval && (
+                <section className="simulator-citations">
+                  <div className="inline-badges">
+                    <BookOpen size={16} />
+                    <strong>Источники deterministic retrieval</strong>
+                    <StatusBadge tone="warning">Без LLM</StatusBadge>
+                  </div>
+                  {lastToolResult.citations?.map((citation, index) => (
+                    <div
+                      className="simulator-citation"
+                      key={citation.chunk_id ?? index}
+                    >
+                      <strong>{citation.title ?? "Документ"}</strong>
+                      <span>
+                        v{citation.document_version ?? "?"}
+                        {citation.page ? ` · стр. ${citation.page}` : ""}
+                        {citation.section ? ` · ${citation.section}` : ""}
+                        {typeof lastToolResult.scores?.[index] === "number"
+                          ? ` · score ${lastToolResult.scores[index].toFixed(3)}`
+                          : ""}
+                      </span>
+                    </div>
+                  ))}
+                </section>
               )}
               {call.summary && (
                 <div className="summary-card">
