@@ -4,15 +4,22 @@ import csv
 import io
 import zipfile
 from datetime import UTC, date, datetime, timedelta
+from hashlib import sha256
 from importlib import import_module
 from pathlib import Path
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, File, Form, Header, Request, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from teamora_api.audit import write_audit
+from teamora_api.background_service import (
+    acquire_idempotency_lock,
+    append_background_job_event,
+    enqueue_background_job,
+)
+from teamora_api.config import get_settings
 from teamora_api.customer_service import (
     NormalizedContact,
     contacts_for_customers,
@@ -25,8 +32,24 @@ from teamora_api.customer_service import (
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import LanguageCode
 from teamora_api.errors import ApiError
-from teamora_api.models import Customer, CustomerContact, CustomerFieldDefinition, CustomerImport
+from teamora_api.models import (
+    BackgroundJob,
+    Customer,
+    CustomerContact,
+    CustomerFieldDefinition,
+    CustomerImport,
+    JobCommandSubmission,
+    StorageObject,
+)
+from teamora_api.object_storage import (
+    ObjectStorageUnavailable,
+    PrivateObjectStorage,
+    import_object_key,
+)
 from teamora_api.project_access import resolve_project
+from teamora_api.realtime import enqueue_realtime_event
+from teamora_api.schemas.background import BackgroundImportCommitRequest, BackgroundImportRead
+from teamora_api.schemas.common import Page
 from teamora_api.schemas.crm import (
     ContactKind,
     CustomerContactInput,
@@ -44,6 +67,7 @@ router = APIRouter(prefix="/customers/import", tags=["customer-imports"])
 
 MAX_IMPORT_BYTES = 2 * 1024 * 1024
 MAX_UNCOMPRESSED_XLSX_BYTES = 20 * 1024 * 1024
+MAX_BACKGROUND_UNCOMPRESSED_XLSX_BYTES = 250 * 1024 * 1024
 MAX_IMPORT_ROWS = 500
 MAX_IMPORT_COLUMNS = 100
 MAX_IMPORT_SHEETS = 10
@@ -165,17 +189,36 @@ def read_csv(content: bytes) -> dict[str, object]:
     return {"headers": headers, "rows": data_rows}
 
 
-def validate_xlsx_archive(content: bytes) -> None:
+def validate_xlsx_archive(
+    content: bytes, *, maximum_uncompressed_bytes: int = MAX_UNCOMPRESSED_XLSX_BYTES
+) -> None:
     stream = io.BytesIO(content)
     if not zipfile.is_zipfile(stream):
         raise ApiError(422, "customer_import_xlsx_invalid", "XLSX-файл повреждён")
     stream.seek(0)
     with zipfile.ZipFile(stream) as archive:
-        total_size = sum(info.file_size for info in archive.infolist())
-        if total_size > MAX_UNCOMPRESSED_XLSX_BYTES:
+        entries = archive.infolist()
+        total_size = sum(info.file_size for info in entries)
+        if total_size > maximum_uncompressed_bytes:
             raise ApiError(422, "customer_import_xlsx_too_large", "Распакованный XLSX слишком большой")
-        if any(info.flag_bits & 0x1 for info in archive.infolist()):
+        if any(info.flag_bits & 0x1 for info in entries):
             raise ApiError(422, "customer_import_xlsx_encrypted", "Зашифрованные XLSX не поддерживаются")
+        names = {info.filename.replace("\\", "/") for info in entries}
+        if "[Content_Types].xml" not in names or "xl/workbook.xml" not in names:
+            raise ApiError(422, "customer_import_xlsx_invalid", "XLSX structure is incomplete")
+        for info in entries:
+            normalized = info.filename.replace("\\", "/")
+            if normalized.startswith("/") or ".." in Path(normalized).parts:
+                raise ApiError(422, "customer_import_xlsx_unsafe_path", "Unsafe XLSX entry path")
+            if info.compress_size > 0 and info.file_size / info.compress_size > 100:
+                raise ApiError(422, "customer_import_xlsx_zip_bomb", "XLSX compression ratio is unsafe")
+            lowered = normalized.casefold()
+            if "vbaproject.bin" in lowered or lowered.startswith("xl/externallinks/"):
+                raise ApiError(
+                    422,
+                    "customer_import_xlsx_unsafe",
+                    "Macros and external links are not allowed",
+                )
 
 
 def read_xlsx(content: bytes) -> dict[str, object]:
@@ -370,6 +413,11 @@ def mapped_customer_values(
 
 def selected_sheet_data(import_preview: CustomerImport) -> tuple[list[str], list[dict[str, object]]]:
     raw = import_preview.source_rows.get(import_preview.selected_sheet)
+    if not isinstance(raw, dict) and {
+        "headers",
+        "rows",
+    }.issubset(import_preview.source_rows):
+        raw = import_preview.source_rows
     if not isinstance(raw, dict):
         raise ApiError(409, "customer_import_sheet_missing", "Выбранный лист больше недоступен")
     headers = raw.get("headers")
@@ -564,7 +612,8 @@ async def update_import_mapping(
     principal: Principal = require_permission("customers:manage"),
 ) -> CustomerImportPreviewRead:
     import_preview = await resolve_import(session, principal, import_id, for_update=True)
-    if import_preview.status != "preview":
+    is_background_ready = import_preview.execution_mode == "background" and import_preview.status == "ready"
+    if import_preview.status != "preview" and not is_background_ready:
         raise ApiError(409, "customer_import_already_committed", "Импорт уже завершён")
     if import_preview.expires_at <= datetime.now(UTC):
         import_preview.status = "expired"
@@ -841,3 +890,754 @@ async def commit_customer_import(
     )
     await session.commit()
     return report
+
+
+def _background_status(import_record: CustomerImport, job: BackgroundJob | None) -> str:
+    if import_record.status == "processing_preview":
+        return "previewing"
+    if import_record.status == "ready":
+        return "preview_ready"
+    if import_record.status == "running":
+        stage = str((job.result_metadata if job else {}).get("stage", "staging"))
+        return "finalizing" if stage == "finalizing" else "staging"
+    return import_record.status
+
+
+def _import_command_fingerprint(
+    *,
+    command: str,
+    import_record: CustomerImport,
+    actor_user_id: UUID,
+    expected_version: int,
+) -> str:
+    mapping = ",".join(f"{key}={value}" for key, value in sorted(import_record.mapping.items()))
+    value = (
+        f"{command}:{import_record.id}:{import_record.project_id}:{actor_user_id}:"
+        f"{expected_version}:{import_record.update_rule}:{mapping}"
+    )
+    return sha256(value.encode("utf-8")).hexdigest()
+
+
+async def _replayed_import_command(
+    session: SessionDep,
+    *,
+    principal: Principal,
+    import_record: CustomerImport,
+    command: str,
+    idempotency_key: str,
+    fingerprint: str,
+) -> bool:
+    previous = await session.scalar(
+        select(JobCommandSubmission).where(
+            JobCommandSubmission.tenant_id == principal.tenant_id,
+            JobCommandSubmission.idempotency_key == idempotency_key,
+        )
+    )
+    if previous is None:
+        return False
+    if (
+        previous.command != command
+        or previous.request_fingerprint != fingerprint
+        or previous.response_metadata.get("import_id") != str(import_record.id)
+    ):
+        raise ApiError(409, "idempotency_key_reused", "Idempotency-Key was reused")
+    return True
+
+
+def _import_command_submission(
+    *,
+    principal: Principal,
+    import_record: CustomerImport,
+    job: BackgroundJob,
+    command: str,
+    idempotency_key: str,
+    fingerprint: str,
+) -> JobCommandSubmission:
+    return JobCommandSubmission(
+        tenant_id=principal.tenant_id,
+        project_id=import_record.project_id,
+        job_id=job.id,
+        submitted_by_user_id=principal.user_id,
+        command=command,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+        status="completed",
+        response_metadata={
+            "import_id": str(import_record.id),
+            "status": import_record.status,
+            "job_id": str(job.id),
+            "version": job.lock_version,
+        },
+    )
+
+
+def _background_preview_data(
+    import_record: CustomerImport,
+) -> tuple[list[str], list[dict[str, object]]]:
+    def normalize_rows(value: object) -> list[dict[str, object]]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, object]] = []
+        for index, item in enumerate(value, start=2):
+            if not isinstance(item, dict):
+                continue
+            structured_values = item.get("values")
+            values = structured_values if isinstance(structured_values, dict) else item
+            raw_row_number = item.get("row_number")
+            row_number = raw_row_number if isinstance(raw_row_number, int) else index
+            raw_duplicates = item.get("duplicate_fields")
+            raw_errors = item.get("errors")
+            normalized.append(
+                {
+                    "row_number": row_number,
+                    "values": dict(values),
+                    "duplicate_fields": (
+                        [str(entry) for entry in raw_duplicates] if isinstance(raw_duplicates, list) else []
+                    ),
+                    "errors": ([str(entry) for entry in raw_errors] if isinstance(raw_errors, list) else []),
+                }
+            )
+        return normalized
+
+    raw_sheet = import_record.source_rows.get(import_record.selected_sheet)
+    if not isinstance(raw_sheet, dict) and {
+        "headers",
+        "rows",
+    }.issubset(import_record.source_rows):
+        raw_sheet = import_record.source_rows
+    if isinstance(raw_sheet, dict):
+        headers = raw_sheet.get("headers")
+        rows = raw_sheet.get("rows")
+        return (
+            [str(value) for value in headers] if isinstance(headers, list) else [],
+            normalize_rows(rows),
+        )
+    headers = import_record.report.get("headers")
+    rows = import_record.report.get("preview_rows")
+    return (
+        [str(value) for value in headers] if isinstance(headers, list) else [],
+        normalize_rows(rows),
+    )
+
+
+async def _background_import_read(session: SessionDep, import_record: CustomerImport) -> BackgroundImportRead:
+    job = (
+        await session.scalar(
+            select(BackgroundJob).where(
+                BackgroundJob.tenant_id == import_record.tenant_id,
+                BackgroundJob.id == import_record.background_job_id,
+            )
+        )
+        if import_record.background_job_id
+        else None
+    )
+    headers, preview_rows = _background_preview_data(import_record)
+    status = _background_status(import_record, job)
+    started = import_record.processing_started_at
+    completed = import_record.processing_completed_at
+    duration_ms = (
+        max(0, int((completed - started).total_seconds() * 1000))
+        if started is not None and completed is not None
+        else None
+    )
+    report_errors = import_record.report.get("errors")
+    error_count = len(report_errors) if isinstance(report_errors, list) else (import_record.invalid_rows or 0)
+    return BackgroundImportRead(
+        id=import_record.id,
+        job_id=job.id if job else None,
+        project_id=import_record.project_id,
+        file_name=import_record.file_name,
+        file_type=import_record.file_type,
+        selected_sheet=import_record.selected_sheet,
+        sheet_names=import_record.sheet_names,
+        headers=headers,
+        mapping=import_record.mapping,
+        update_rule=cast(ImportUpdateRule, import_record.update_rule),
+        status=status,
+        progress=import_record.progress or (job.progress if job else 0),
+        preview_rows=preview_rows[: get_settings().background_import_preview_rows],
+        total_rows=import_record.total_rows or import_record.row_count,
+        valid_rows=import_record.valid_rows or 0,
+        invalid_rows=import_record.invalid_rows or 0,
+        duplicate_rows=import_record.duplicate_rows or 0,
+        created=import_record.created_count or 0,
+        updated=import_record.updated_count or 0,
+        skipped=import_record.skipped_count or 0,
+        error_count=error_count,
+        processing_duration_ms=duration_ms,
+        state_version=job.lock_version if job else 1,
+        can_commit=status == "preview_ready" and bool(import_record.mapping),
+        can_cancel=status in {"previewing", "preview_ready", "queued", "staging", "ready_to_finalize"},
+        can_retry=(
+            (status == "failed" or (status == "completed" and import_record.report_storage_object_id is None))
+            and job is not None
+            and job.status in {"failed", "dead_letter"}
+            and not bool(job.result_metadata.get("retention_payload_purged"))
+        ),
+        report_available=import_record.report_storage_object_id is not None,
+        safe_error_code=job.safe_error_code if job else None,
+        created_at=import_record.created_at,
+        completed_at=import_record.processing_completed_at,
+    )
+
+
+@router.post("/background/preview", response_model=BackgroundImportRead, status_code=202)
+async def create_background_import_preview(
+    request: Request,
+    session: SessionDep,
+    principal: Principal = require_permission("customers:manage"),
+    project_id: UUID = Form(...),
+    file: UploadFile = File(...),
+    sheet_name: str | None = Form(default=None),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
+) -> BackgroundImportRead:
+    project = await resolve_project(session, principal, project_id)
+    settings = get_settings()
+    safe_name = Path(file.filename or "import").name[:255]
+    extension = Path(safe_name).suffix.casefold()
+    content_type = (file.content_type or "application/octet-stream").casefold()
+    if extension not in {".csv", ".xlsx"}:
+        raise ApiError(415, "customer_import_type_invalid", "Only CSV and XLSX are supported")
+    allowed_mimes = CSV_MIME_TYPES if extension == ".csv" else XLSX_MIME_TYPES
+    if content_type not in allowed_mimes:
+        raise ApiError(415, "customer_import_mime_invalid", "File MIME does not match its format")
+    content = await file.read(settings.background_import_max_file_bytes + 1)
+    await file.close()
+    if not content:
+        raise ApiError(422, "customer_import_empty", "Import file is empty")
+    if len(content) > settings.background_import_max_file_bytes:
+        raise ApiError(413, "customer_import_file_too_large", "Background import exceeds 25 MB")
+    if extension == ".csv":
+        if b"\x00" in content[:4096]:
+            raise ApiError(422, "customer_import_csv_invalid", "CSV contains binary data")
+    else:
+        validate_xlsx_archive(
+            content,
+            maximum_uncompressed_bytes=MAX_BACKGROUND_UNCOMPRESSED_XLSX_BYTES,
+        )
+    checksum = sha256(content).hexdigest()
+    await acquire_idempotency_lock(
+        session,
+        namespace="customer-import-preview",
+        tenant_id=principal.tenant_id,
+        idempotency_key=idempotency_key,
+    )
+    existing = await session.scalar(
+        select(CustomerImport).where(
+            CustomerImport.tenant_id == principal.tenant_id,
+            CustomerImport.idempotency_key == idempotency_key,
+            CustomerImport.execution_mode == "background",
+        )
+    )
+    if existing is not None:
+        existing_storage = await session.scalar(
+            select(StorageObject).where(
+                StorageObject.tenant_id == principal.tenant_id,
+                StorageObject.id == existing.source_storage_object_id,
+            )
+        )
+        same_request = (
+            existing.project_id == project.id
+            and existing.file_name == safe_name
+            and existing.file_type == extension.removeprefix(".")
+            and existing_storage is not None
+            and existing_storage.checksum_sha256 == checksum
+            and existing_storage.size_bytes == len(content)
+            and (sheet_name is None or existing.selected_sheet == sheet_name)
+        )
+        if not same_request:
+            raise ApiError(
+                409,
+                "idempotency_key_reused",
+                "Idempotency-Key was reused with a different import file or project",
+            )
+        return await _background_import_read(session, existing)
+    import_id = uuid4()
+    storage_id = uuid4()
+    object_key = import_object_key(
+        tenant_id=principal.tenant_id,
+        project_id=project.id,
+        import_id=import_id,
+        kind="source",
+    )
+    try:
+        storage = PrivateObjectStorage(settings)
+        metadata = await storage.put_bytes(key=object_key, data=content, content_type=content_type)
+    except ObjectStorageUnavailable as exc:
+        raise ApiError(503, "storage_unavailable", str(exc)) from exc
+    except Exception as exc:
+        raise ApiError(503, "storage_upload_failed", "Could not store private import source") from exc
+    storage_record = StorageObject(
+        id=storage_id,
+        tenant_id=principal.tenant_id,
+        project_id=project.id,
+        bucket=settings.minio_bucket,
+        object_key=object_key,
+        category="import_source",
+        owner_aggregate_type="customer_import",
+        owner_aggregate_id=import_id,
+        checksum_sha256=metadata.checksum_sha256,
+        size_bytes=metadata.size_bytes,
+        content_type=metadata.content_type,
+        status="active",
+        retention_state="retained",
+        expires_at=datetime.now(UTC) + timedelta(days=7),
+        lock_version=1,
+    )
+    import_record = CustomerImport(
+        id=import_id,
+        tenant_id=principal.tenant_id,
+        project_id=project.id,
+        created_by_user_id=principal.user_id,
+        file_name=safe_name,
+        file_type=extension.removeprefix("."),
+        sheet_names=["CSV"] if extension == ".csv" else [],
+        selected_sheet=sheet_name or ("CSV" if extension == ".csv" else "pending"),
+        source_rows={},
+        mapping={},
+        update_rule="skip",
+        status="processing_preview",
+        row_count=0,
+        report={},
+        idempotency_key=idempotency_key,
+        expires_at=datetime.now(UTC) + timedelta(hours=PREVIEW_TTL_HOURS),
+        execution_mode="background",
+        source_storage_object_id=storage_id,
+        progress=0,
+        total_rows=0,
+        valid_rows=0,
+        invalid_rows=0,
+        duplicate_rows=0,
+        created_count=0,
+        updated_count=0,
+        skipped_count=0,
+    )
+    session.add(storage_record)
+    await session.flush()
+    session.add(import_record)
+    await session.flush()
+    job, _ = await enqueue_background_job(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=project.id,
+        created_by_user_id=principal.user_id,
+        job_type="customer_import.prepare_preview",
+        queue="imports",
+        priority=60,
+        safe_payload={
+            "import_id": import_record.id,
+            "storage_object_id": storage_record.id,
+            "project_id": project.id,
+        },
+        idempotency_key=f"preview:{idempotency_key}",
+        correlation_id=request.state.correlation_id,
+    )
+    import_record.background_job_id = job.id
+    await write_audit(
+        session,
+        tenant_id=principal.tenant_id,
+        actor_user_id=principal.user_id,
+        action="customer_import.background_preview_queued",
+        resource_type="customer_import",
+        resource_id=import_record.id,
+        correlation_id=request.state.correlation_id,
+        safe_metadata={"project_id": str(project.id), "file_type": import_record.file_type},
+    )
+    await session.flush()
+    response = await _background_import_read(session, import_record)
+    await session.commit()
+    return response
+
+
+@router.get("/background", response_model=Page[BackgroundImportRead])
+async def list_background_imports(
+    session: SessionDep,
+    principal: Principal = require_permission("customers:manage"),
+    project_id: UUID | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> Page[BackgroundImportRead]:
+    if project_id is not None:
+        await resolve_project(session, principal, project_id, active_only=False)
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+    filters = [
+        CustomerImport.tenant_id == principal.tenant_id,
+        CustomerImport.execution_mode == "background",
+    ]
+    if project_id is not None:
+        filters.append(CustomerImport.project_id == project_id)
+    total = int(await session.scalar(select(func.count()).select_from(CustomerImport).where(*filters)) or 0)
+    rows = list(
+        await session.scalars(
+            select(CustomerImport)
+            .where(*filters)
+            .order_by(CustomerImport.created_at.desc(), CustomerImport.id)
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    return Page(
+        items=[await _background_import_read(session, item) for item in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/background/{import_id}/status", response_model=BackgroundImportRead)
+async def get_background_import_status(
+    import_id: UUID,
+    session: SessionDep,
+    principal: Principal = require_permission("customers:manage"),
+) -> BackgroundImportRead:
+    import_record = await resolve_import(session, principal, import_id)
+    if import_record.execution_mode != "background":
+        raise ApiError(404, "customer_import_not_found", "Background import was not found")
+    return await _background_import_read(session, import_record)
+
+
+@router.post(
+    "/background/{import_id}/background-commit",
+    response_model=BackgroundImportRead,
+    status_code=202,
+)
+async def commit_background_import(
+    import_id: UUID,
+    payload: BackgroundImportCommitRequest,
+    request: Request,
+    session: SessionDep,
+    principal: Principal = require_permission("customers:manage"),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
+) -> BackgroundImportRead:
+    await acquire_idempotency_lock(
+        session,
+        namespace="job-command-submission",
+        tenant_id=principal.tenant_id,
+        idempotency_key=idempotency_key,
+    )
+    import_record = await resolve_import(session, principal, import_id, for_update=True)
+    if import_record.execution_mode != "background":
+        raise ApiError(404, "customer_import_not_found", "Background import was not found")
+    fingerprint = _import_command_fingerprint(
+        command="customer_import.commit",
+        import_record=import_record,
+        actor_user_id=principal.user_id,
+        expected_version=payload.expected_version,
+    )
+    if await _replayed_import_command(
+        session,
+        principal=principal,
+        import_record=import_record,
+        command="customer_import.commit",
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+    ):
+        return await _background_import_read(session, import_record)
+    if import_record.expires_at <= datetime.now(UTC):
+        import_record.status = "expired"
+        import_record.source_rows = {}
+        await session.commit()
+        raise ApiError(410, "customer_import_expired", "Background import preview has expired")
+    current_job = await session.scalar(
+        select(BackgroundJob)
+        .where(
+            BackgroundJob.tenant_id == principal.tenant_id,
+            BackgroundJob.id == import_record.background_job_id,
+        )
+        .with_for_update()
+    )
+    if current_job and current_job.lock_version != payload.expected_version:
+        raise ApiError(409, "customer_import_conflict", "Import changed; refresh and retry")
+    if import_record.status in {"queued", "running", "finalizing", "completed"}:
+        return await _background_import_read(session, import_record)
+    if import_record.status != "ready":
+        raise ApiError(409, "customer_import_preview_not_ready", "Background preview is not ready")
+    if "display_name" not in import_record.mapping:
+        raise ApiError(422, "customer_import_name_mapping_required", "Map the customer name column")
+    import_record.mapping_snapshot = dict(import_record.mapping)
+    import_record.update_policy_snapshot = import_record.update_rule
+    import_record.status = "queued"
+    import_record.progress = 0
+    import_record.processing_started_at = None
+    import_record.processing_completed_at = None
+    job, _ = await enqueue_background_job(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=import_record.project_id,
+        created_by_user_id=principal.user_id,
+        job_type="customer_import.process",
+        queue="imports",
+        priority=70,
+        safe_payload={
+            "import_id": import_record.id,
+            "storage_object_id": import_record.source_storage_object_id,
+            "project_id": import_record.project_id,
+        },
+        idempotency_key=f"commit:{idempotency_key}",
+        correlation_id=request.state.correlation_id,
+        causation_id=current_job.id if current_job else None,
+    )
+    session.add(
+        _import_command_submission(
+            principal=principal,
+            import_record=import_record,
+            job=job,
+            command="customer_import.commit",
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+    )
+    import_record.background_job_id = job.id
+    await write_audit(
+        session,
+        tenant_id=principal.tenant_id,
+        actor_user_id=principal.user_id,
+        action="customer_import.background_commit_queued",
+        resource_type="customer_import",
+        resource_id=import_record.id,
+        correlation_id=request.state.correlation_id,
+        safe_metadata={"update_rule": import_record.update_rule},
+    )
+    await session.flush()
+    response = await _background_import_read(session, import_record)
+    await session.commit()
+    return response
+
+
+@router.post("/background/{import_id}/cancel", response_model=BackgroundImportRead)
+async def cancel_background_import(
+    import_id: UUID,
+    payload: BackgroundImportCommitRequest,
+    request: Request,
+    session: SessionDep,
+    principal: Principal = require_permission("customers:manage"),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
+) -> BackgroundImportRead:
+    await acquire_idempotency_lock(
+        session,
+        namespace="job-command-submission",
+        tenant_id=principal.tenant_id,
+        idempotency_key=idempotency_key,
+    )
+    import_record = await resolve_import(session, principal, import_id, for_update=True)
+    if import_record.execution_mode != "background":
+        raise ApiError(404, "customer_import_not_found", "Background import was not found")
+    fingerprint = _import_command_fingerprint(
+        command="customer_import.cancel",
+        import_record=import_record,
+        actor_user_id=principal.user_id,
+        expected_version=payload.expected_version,
+    )
+    if await _replayed_import_command(
+        session,
+        principal=principal,
+        import_record=import_record,
+        command="customer_import.cancel",
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+    ):
+        return await _background_import_read(session, import_record)
+    job = await session.scalar(
+        select(BackgroundJob)
+        .where(
+            BackgroundJob.tenant_id == principal.tenant_id,
+            BackgroundJob.id == import_record.background_job_id,
+        )
+        .with_for_update()
+    )
+    if job is None:
+        raise ApiError(409, "customer_import_job_missing", "Background import job is missing")
+    if job.lock_version != payload.expected_version:
+        raise ApiError(409, "customer_import_conflict", "Import changed; refresh and retry")
+    if import_record.status in {"completed", "cancelled"}:
+        return await _background_import_read(session, import_record)
+    if import_record.status == "finalizing":
+        raise ApiError(409, "customer_import_finalizing", "Atomic finalization cannot be interrupted")
+    now = datetime.now(UTC)
+    if job.status in {"running", "cancel_requested"}:
+        job.status = "cancel_requested"
+        import_record.status = "cancel_requested"
+    else:
+        if job.status not in {"completed", "failed", "dead_letter", "cancelled"}:
+            job.status = "cancelled"
+            job.cancelled_at = now
+        import_record.status = "cancelled"
+        import_record.cancelled_at = now
+    job.lock_version += 1
+    session.add(
+        _import_command_submission(
+            principal=principal,
+            import_record=import_record,
+            job=job,
+            command="customer_import.cancel",
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+    )
+    await write_audit(
+        session,
+        tenant_id=principal.tenant_id,
+        actor_user_id=principal.user_id,
+        action="customer_import.background_cancel_requested",
+        resource_type="customer_import",
+        resource_id=import_record.id,
+        correlation_id=request.state.correlation_id,
+    )
+    await session.flush()
+    response = await _background_import_read(session, import_record)
+    await session.commit()
+    return response
+
+
+@router.post("/background/{import_id}/retry", response_model=BackgroundImportRead, status_code=202)
+async def retry_background_import(
+    import_id: UUID,
+    payload: BackgroundImportCommitRequest,
+    request: Request,
+    session: SessionDep,
+    principal: Principal = require_permission("customers:manage"),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
+) -> BackgroundImportRead:
+    await acquire_idempotency_lock(
+        session,
+        namespace="job-command-submission",
+        tenant_id=principal.tenant_id,
+        idempotency_key=idempotency_key,
+    )
+    import_record = await resolve_import(session, principal, import_id, for_update=True)
+    if import_record.execution_mode != "background":
+        raise ApiError(404, "customer_import_not_found", "Background import was not found")
+    fingerprint = _import_command_fingerprint(
+        command="customer_import.retry",
+        import_record=import_record,
+        actor_user_id=principal.user_id,
+        expected_version=payload.expected_version,
+    )
+    if await _replayed_import_command(
+        session,
+        principal=principal,
+        import_record=import_record,
+        command="customer_import.retry",
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+    ):
+        return await _background_import_read(session, import_record)
+    job = await session.scalar(
+        select(BackgroundJob)
+        .where(
+            BackgroundJob.tenant_id == principal.tenant_id,
+            BackgroundJob.id == import_record.background_job_id,
+        )
+        .with_for_update()
+    )
+    if job is None:
+        raise ApiError(409, "customer_import_job_missing", "Background import job is missing")
+    if job.lock_version != payload.expected_version:
+        raise ApiError(409, "customer_import_conflict", "Import changed; refresh and retry")
+    retryable_import_state = import_record.status == "failed" or (
+        import_record.status == "completed" and import_record.report_storage_object_id is None
+    )
+    if not retryable_import_state or job.status not in {"failed", "dead_letter"}:
+        raise ApiError(409, "customer_import_not_retryable", "Background import cannot be retried")
+    if job.result_metadata.get("retention_payload_purged"):
+        raise ApiError(
+            409,
+            "customer_import_payload_purged",
+            "Background import payload was removed by retention and cannot be retried",
+        )
+    now = datetime.now(UTC)
+    job.status = "pending"
+    job.available_at = now
+    job.started_at = None
+    job.completed_at = None
+    job.cancelled_at = None
+    job.lease_owner = None
+    job.lease_token = None
+    job.lease_expires_at = None
+    job.heartbeat_at = None
+    job.progress = 0
+    job.safe_error_code = None
+    job.safe_error_message = None
+    if job.attempt_count >= job.max_attempts:
+        job.max_attempts = job.attempt_count + 1
+    job.lock_version += 1
+    if import_record.status != "completed":
+        import_record.status = (
+            "processing_preview" if job.type == "customer_import.prepare_preview" else "queued"
+        )
+        import_record.progress = 0
+        import_record.processing_started_at = None
+        import_record.processing_completed_at = None
+        import_record.cancelled_at = None
+    session.add(
+        _import_command_submission(
+            principal=principal,
+            import_record=import_record,
+            job=job,
+            command="customer_import.retry",
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+    )
+    await append_background_job_event(
+        session,
+        job=job,
+        event_type="manual_retry_requested",
+        safe_snapshot={"status": job.status, "version": job.lock_version},
+        actor_user_id=principal.user_id,
+        correlation_id=request.state.correlation_id,
+    )
+    await enqueue_realtime_event(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=job.project_id,
+        target_membership_id=None,
+        event_type="job.progress",
+        aggregate_type="background_job",
+        aggregate_id=job.id,
+        aggregate_version=job.lock_version,
+        payload={"status": job.status, "progress": 0},
+        correlation_id=request.state.correlation_id,
+    )
+    await write_audit(
+        session,
+        tenant_id=principal.tenant_id,
+        actor_user_id=principal.user_id,
+        action="customer_import.background_retry_requested",
+        resource_type="customer_import",
+        resource_id=import_record.id,
+        correlation_id=request.state.correlation_id,
+    )
+    await session.flush()
+    response = await _background_import_read(session, import_record)
+    await session.commit()
+    return response
+
+
+@router.get("/background/{import_id}/report", response_model=dict[str, str])
+async def download_background_import_report(
+    import_id: UUID,
+    session: SessionDep,
+    principal: Principal = require_permission("customers:manage"),
+) -> dict[str, str]:
+    import_record = await resolve_import(session, principal, import_id)
+    if import_record.execution_mode != "background" or import_record.report_storage_object_id is None:
+        raise ApiError(404, "customer_import_report_not_found", "Import report is not available")
+    storage_record = await session.scalar(
+        select(StorageObject).where(
+            StorageObject.tenant_id == principal.tenant_id,
+            StorageObject.id == import_record.report_storage_object_id,
+            StorageObject.status != "purged",
+        )
+    )
+    if storage_record is None:
+        raise ApiError(404, "customer_import_report_not_found", "Import report is not available")
+    try:
+        url = await PrivateObjectStorage(get_settings()).presigned_download(
+            key=storage_record.object_key,
+            filename=f"customer-import-{import_record.id}-errors.json",
+        )
+    except Exception as exc:
+        raise ApiError(503, "storage_unavailable", "Import report is temporarily unavailable") from exc
+    return {"url": url}

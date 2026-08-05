@@ -39,6 +39,9 @@ outcome and allocates the next customer atomically with an idempotent replay res
 recovery details are documented in [the Dialer workspace guide](docs/dialer-workspace.md).
 Team roles, invitations and presence are documented in
 [the team access guide](docs/team-access.md).
+Durable Worker jobs, large customer imports, private-object reconciliation, and
+two-stage retention are documented in
+[the background jobs and retention guide](docs/BACKGROUND_JOBS_RETENTION.md).
 
 The standalone web image compiles Next.js rewrites during the Docker build. Its
 Dockerfile therefore defaults `API_INTERNAL_URL` to the Compose service address
@@ -148,8 +151,10 @@ the API validates every value against the customer's own tenant and project.
 CSV/XLSX import uses a two-step preview/commit flow. Preview validates the file and
 mapping without creating customers. Commit requires an `Idempotency-Key`, skips invalid
 rows, and only updates duplicates when the user explicitly selects the update rule.
-Synchronous imports are limited to 2 MB and 500 data rows per sheet; larger background
-imports remain reserved for the Worker stage.
+Synchronous imports are limited to 2 MB and 500 data rows per sheet. The background
+path supports configured files up to 25 MB and 100,000 rows by default, streams rows
+into tenant-scoped staging, and applies all customer changes in one atomic finalization
+transaction. Progress and recovery are available after reload.
 
 Client contacts are stored in `customer_contacts` and are unique within their tenant,
 project, kind and normalized value. `phone_numbers.e164` remains globally unique because

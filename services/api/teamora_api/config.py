@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     knowledge_embedding_provider: str = "mock"
     knowledge_embedding_model: str = "kline-deterministic-v1"
     knowledge_embedding_dimension: int = Field(default=64, ge=8, le=4096)
+    background_import_max_file_bytes: int = Field(default=25 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
+    background_import_max_rows: int = Field(default=100_000, ge=501, le=1_000_000)
+    background_import_preview_rows: int = Field(default=100, ge=10, le=1000)
+    retention_default_grace_days: int = Field(default=7, ge=1, le=90)
 
     jwt_signing_key: SecretStr = Field(default=SecretStr("development-only-signing-key-change-me"))
     local_secret_encryption_key: SecretStr | None = None

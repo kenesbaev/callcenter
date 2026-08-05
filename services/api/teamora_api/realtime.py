@@ -70,6 +70,20 @@ KNOWLEDGE_EVENT_TYPES = frozenset(
         "knowledge.index_updated",
     }
 )
+BACKGROUND_EVENT_TYPES = frozenset(
+    {
+        "job.started",
+        "job.progress",
+        "job.completed",
+        "job.failed",
+        "job.cancelled",
+        "import.progress",
+        "import.completed",
+        "retention.preview_ready",
+        "retention.run_completed",
+        "storage.issue_detected",
+    }
+)
 REALTIME_EVENT_TYPES = (
     CALL_EVENT_TYPES
     | TRANSFER_EVENT_TYPES
@@ -78,6 +92,7 @@ REALTIME_EVENT_TYPES = (
     | TEAM_EVENT_TYPES
     | ANALYTICS_EVENT_TYPES
     | KNOWLEDGE_EVENT_TYPES
+    | BACKGROUND_EVENT_TYPES
 )
 
 _SENSITIVE_PAYLOAD_KEYS = frozenset(

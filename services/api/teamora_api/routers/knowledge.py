@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, Header, Request, UploadFile
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 
 from teamora_api.audit import write_audit
+from teamora_api.background_service import (
+    acquire_idempotency_lock,
+    enqueue_background_job,
+    serialize_background_job,
+)
 from teamora_api.config import get_settings
 from teamora_api.dependencies import Principal, SessionDep, require_permission
 from teamora_api.enums import LanguageCode, RoleName
@@ -20,9 +26,9 @@ from teamora_api.knowledge_service import hybrid_retrieve
 from teamora_api.knowledge_storage import (
     KnowledgeObjectStorage,
     KnowledgeStorageUnavailable,
-    knowledge_object_key,
 )
 from teamora_api.models import (
+    BackgroundJob,
     DocumentIngestionJob,
     KnowledgeBaseRevision,
     KnowledgeChunk,
@@ -30,9 +36,14 @@ from teamora_api.models import (
     KnowledgeDocumentVersion,
     KnowledgeRetrievalExecution,
     KnowledgeSource,
+    RetentionCandidate,
+    StorageObject,
+    TeamCommandSubmission,
 )
+from teamora_api.object_storage import controlled_object_key
 from teamora_api.project_access import accessible_project_ids, resolve_project
 from teamora_api.realtime import enqueue_realtime_event
+from teamora_api.retention_lock import acquire_retention_lock
 from teamora_api.schemas.common import Page
 from teamora_api.schemas.knowledge import (
     KnowledgeBaseCreate,
@@ -54,6 +65,74 @@ from teamora_api.schemas.knowledge import (
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 MANAGER_ROLES = {RoleName.TENANT_OWNER, RoleName.TENANT_MANAGER}
+
+
+def _knowledge_command_fingerprint(operation: str, payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        {"operation": operation, "payload": payload},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+async def _knowledge_command_replay(
+    session: SessionDep,
+    *,
+    tenant_id: UUID,
+    operation: str,
+    idempotency_key: str,
+    request_fingerprint: str,
+    resource_id: UUID | None = None,
+) -> TeamCommandSubmission | None:
+    # TeamCommandSubmission is the existing durable, tenant-RLS protected domain
+    # command journal. Its unique key is tenant-wide, so every user-facing domain
+    # sharing it must also share this advisory-lock namespace.
+    await acquire_idempotency_lock(
+        session,
+        namespace="team",
+        tenant_id=tenant_id,
+        idempotency_key=idempotency_key,
+    )
+    replay = await session.scalar(
+        select(TeamCommandSubmission).where(
+            TeamCommandSubmission.tenant_id == tenant_id,
+            TeamCommandSubmission.idempotency_key == idempotency_key,
+        )
+    )
+    if replay is None:
+        return None
+    if (
+        replay.operation != operation
+        or replay.request_fingerprint != request_fingerprint
+        or (resource_id is not None and replay.resource_id != resource_id)
+    ):
+        raise ApiError(409, "idempotency_key_reused", "Idempotency-Key was reused")
+    return replay
+
+
+def _record_knowledge_command(
+    session: SessionDep,
+    *,
+    tenant_id: UUID,
+    operation: str,
+    idempotency_key: str,
+    request_fingerprint: str,
+    resource_id: UUID,
+    response: KnowledgeDocumentRead | KnowledgeDocumentVersionRead,
+) -> None:
+    response_payload = response.model_dump(mode="json")
+    session.add(
+        TeamCommandSubmission(
+            tenant_id=tenant_id,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            resource_id=resource_id,
+            response_payload=response_payload,
+        )
+    )
 
 
 def _embedding_status(revision: KnowledgeBaseRevision) -> str:
@@ -551,6 +630,7 @@ async def _clone_revision_documents(
             file_type=old.file_type,
             content_type=old.content_type,
             object_key=old.object_key,
+            storage_object_id=old.storage_object_id,
             checksum_sha256=old.checksum_sha256,
             content_length=old.content_length,
             extracted_text=old.extracted_text,
@@ -604,6 +684,7 @@ async def publish_revision(
     session: SessionDep,
     principal: Principal = require_permission("knowledge:manage"),
 ) -> KnowledgeRevisionRead:
+    await acquire_retention_lock(session, principal.tenant_id)
     revision = await _resolve_revision(session, principal, revision_id, draft_only=True, for_update=True)
     if revision.lock_version != payload.expected_version:
         raise ApiError(409, "knowledge_revision_conflict", "Revision was changed by another request")
@@ -634,6 +715,12 @@ async def publish_revision(
     source.lock_version += 1
     project = await resolve_project(session, principal, revision.project_id, for_update=True)
     project.knowledge_source_id = source.id
+    await _recompute_source_storage_lifecycle(
+        session,
+        source=source,
+        published_revision_id=revision.id,
+        occurred_at=now,
+    )
     await enqueue_realtime_event(
         session,
         tenant_id=principal.tenant_id,
@@ -738,6 +825,20 @@ async def _version_read(
         )
         or 0
     )
+    background_job = await session.scalar(
+        select(BackgroundJob)
+        .join(
+            DocumentIngestionJob,
+            and_(
+                DocumentIngestionJob.tenant_id == BackgroundJob.tenant_id,
+                DocumentIngestionJob.background_job_id == BackgroundJob.id,
+            ),
+        )
+        .where(
+            DocumentIngestionJob.tenant_id == version.tenant_id,
+            DocumentIngestionJob.document_version_id == version.id,
+        )
+    )
     return KnowledgeDocumentVersionRead(
         id=version.id,
         document_id=version.document_id,
@@ -757,6 +858,7 @@ async def _version_read(
         safe_error_code=version.safe_error_code,
         safe_error_message=version.safe_error_message,
         lock_version=version.lock_version,
+        background_job=(serialize_background_job(background_job) if background_job else None),
         created_at=version.created_at,
     )
 
@@ -793,21 +895,7 @@ async def upload_document(
     from teamora_api.schemas.call_flows import normalize_language_code
 
     normalized_language = normalize_language_code(language)
-    revision = await _resolve_revision(session, principal, revision_id, draft_only=True)
-    existing_job = await session.scalar(
-        select(DocumentIngestionJob).where(
-            DocumentIngestionJob.tenant_id == principal.tenant_id,
-            DocumentIngestionJob.idempotency_key == idempotency_key,
-        )
-    )
-    if existing_job:
-        existing_version = await session.get(KnowledgeDocumentVersion, existing_job.document_version_id)
-        if existing_version is None:
-            raise ApiError(409, "knowledge_upload_incomplete", "Previous upload is incomplete")
-        existing_document = await session.get(KnowledgeDocument, existing_version.document_id)
-        if existing_document is None:
-            raise ApiError(409, "knowledge_upload_incomplete", "Previous upload is incomplete")
-        return await _document_read(session, existing_document, existing_version)
+    revision = await _resolve_revision(session, principal, revision_id)
     data = await file.read(get_settings().knowledge_max_file_bytes + 1)
     settings = get_settings()
     validated = validate_upload(
@@ -819,6 +907,60 @@ async def upload_document(
         max_zip_ratio=settings.knowledge_max_zip_ratio,
     )
     checksum = hashlib.sha256(data).hexdigest()
+    operation = "knowledge.document.upload"
+    fingerprint = _knowledge_command_fingerprint(
+        operation,
+        {
+            "revision_id": str(revision_id),
+            "title": title.strip(),
+            "language": normalized_language,
+            "document_id": str(document_id) if document_id else None,
+            "document_expected_version": document_expected_version,
+            "filename": validated.safe_filename,
+            "file_type": validated.file_type,
+            "content_type": validated.content_type,
+            "content_length": len(data),
+            "checksum_sha256": checksum,
+        },
+    )
+    replay = await _knowledge_command_replay(
+        session,
+        tenant_id=principal.tenant_id,
+        operation=operation,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+    )
+    if replay is not None:
+        return KnowledgeDocumentRead.model_validate(replay.response_payload)
+    revision = await _resolve_revision(
+        session,
+        principal,
+        revision_id,
+        draft_only=True,
+        for_update=True,
+    )
+    existing_job = await session.scalar(
+        select(DocumentIngestionJob).where(
+            DocumentIngestionJob.tenant_id == principal.tenant_id,
+            DocumentIngestionJob.idempotency_key == idempotency_key,
+        )
+    )
+    if existing_job is not None:
+        raise ApiError(
+            409,
+            "knowledge_upload_legacy_replay_unavailable",
+            "The previous upload predates durable request fingerprints",
+        )
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(
+                func.hashtextextended(
+                    f"knowledge-content:{principal.tenant_id}:{revision.id}:{checksum}",
+                    0,
+                )
+            )
+        )
+    )
     duplicate = await session.scalar(
         select(KnowledgeDocumentVersion.id).where(
             KnowledgeDocumentVersion.tenant_id == principal.tenant_id,
@@ -910,12 +1052,11 @@ async def upload_document(
     )
     session.add(version)
     await session.flush()
-    key = knowledge_object_key(
+    key = controlled_object_key(
         tenant_id=principal.tenant_id,
         project_id=revision.project_id,
-        knowledge_base_id=revision.knowledge_source_id,
-        document_id=document.id,
-        version_id=version.id,
+        category="knowledge_original",
+        object_id=version.id,
     )
     try:
         storage = KnowledgeObjectStorage(get_settings())
@@ -927,7 +1068,41 @@ async def upload_document(
         await session.rollback()
         raise ApiError(503, "knowledge_storage_failed", "Could not store the private original") from exc
     version.object_key = key
+    storage_object = StorageObject(
+        tenant_id=principal.tenant_id,
+        project_id=revision.project_id,
+        bucket=settings.minio_bucket,
+        object_key=key,
+        category="knowledge_original",
+        owner_aggregate_type="knowledge_document_version",
+        owner_aggregate_id=version.id,
+        checksum_sha256=checksum,
+        size_bytes=len(data),
+        content_type=validated.content_type,
+        status="active",
+        retention_state="retained",
+        lock_version=1,
+    )
+    session.add(storage_object)
+    await session.flush()
+    version.storage_object_id = storage_object.id
     transition_document(version, "queued")
+    background_job, _ = await enqueue_background_job(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=revision.project_id,
+        created_by_user_id=principal.user_id,
+        job_type="knowledge.ingest_document",
+        queue="knowledge",
+        priority=60,
+        safe_payload={
+            "document_version_id": version.id,
+            "knowledge_base_id": revision.knowledge_source_id,
+            "storage_object_id": storage_object.id,
+        },
+        idempotency_key=idempotency_key,
+        correlation_id=request.state.correlation_id,
+    )
     job = DocumentIngestionJob(
         tenant_id=principal.tenant_id,
         project_id=revision.project_id,
@@ -935,6 +1110,7 @@ async def upload_document(
         status="pending",
         stage="queued",
         idempotency_key=idempotency_key,
+        background_job_id=background_job.id,
     )
     session.add(job)
     revision.lock_version += 1
@@ -961,6 +1137,15 @@ async def upload_document(
     )
     await session.flush()
     response = await _document_read(session, document, version)
+    _record_knowledge_command(
+        session,
+        tenant_id=principal.tenant_id,
+        operation=operation,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+        resource_id=version.id,
+        response=response,
+    )
     await session.commit()
     return response
 
@@ -971,10 +1156,34 @@ async def create_text_document(
     request: Request,
     session: SessionDep,
     principal: Principal = require_permission("knowledge:manage"),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
 ) -> KnowledgeDocumentRead:
     legacy_auto_publish = payload.project_id is None and payload.knowledge_base_id is None
     project = await resolve_project(session, principal, payload.project_id)
+    operation = "knowledge.text.create"
+    fingerprint = _knowledge_command_fingerprint(operation, payload.model_dump(mode="json"))
+    replay = await _knowledge_command_replay(
+        session,
+        tenant_id=principal.tenant_id,
+        operation=operation,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+    )
+    if replay is not None:
+        return KnowledgeDocumentRead.model_validate(replay.response_payload)
+    # Serialise initial base/draft creation and duplicate detection for a project.
+    # This lock is transaction-scoped and is acquired before any source mutation or
+    # embedding call, so concurrent logical retries cannot duplicate embedding cost.
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(
+                func.hashtextextended(
+                    f"knowledge-text-project:{principal.tenant_id}:{project.id}",
+                    0,
+                )
+            )
+        )
+    )
     source = (
         await _resolve_base(session, principal, payload.knowledge_base_id)
         if payload.knowledge_base_id
@@ -1025,7 +1234,6 @@ async def create_text_document(
         session.add(revision)
         await session.flush()
     content_hash = hashlib.sha256(payload.content.encode()).hexdigest()
-    idempotency_hash = hashlib.sha256(idempotency_key.encode()).hexdigest() if idempotency_key else None
     existing = await session.scalar(
         select(KnowledgeDocument).where(
             KnowledgeDocument.tenant_id == principal.tenant_id,
@@ -1034,21 +1242,6 @@ async def create_text_document(
         )
     )
     if existing:
-        existing_version = await session.scalar(
-            select(KnowledgeDocumentVersion)
-            .where(
-                KnowledgeDocumentVersion.tenant_id == principal.tenant_id,
-                KnowledgeDocumentVersion.revision_id == revision.id,
-                KnowledgeDocumentVersion.document_id == existing.id,
-            )
-            .order_by(KnowledgeDocumentVersion.version.desc())
-        )
-        if (
-            idempotency_hash
-            and existing_version is not None
-            and existing_version.extraction_metadata.get("idempotency_key_hash") == idempotency_hash
-        ):
-            return await _document_read(session, existing, existing_version)
         raise ApiError(409, "knowledge_duplicate", "The same knowledge content already exists")
     normalized = normalize_text(payload.content)
     provider = embedding_provider(
@@ -1098,7 +1291,6 @@ async def create_text_document(
         extraction_metadata={
             "source": "text_editor",
             "embedding_usage": embedding_usage,
-            **({"idempotency_key_hash": idempotency_hash} if idempotency_hash else {}),
         },
         ready_at=datetime.now(UTC),
     )
@@ -1180,6 +1372,15 @@ async def create_text_document(
     )
     await session.flush()
     response = await _document_read(session, document, version)
+    _record_knowledge_command(
+        session,
+        tenant_id=principal.tenant_id,
+        operation=operation,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+        resource_id=version.id,
+        response=response,
+    )
     await session.commit()
     return response
 
@@ -1289,6 +1490,22 @@ async def retry_document(
     principal: Principal = require_permission("knowledge:manage"),
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=160),
 ) -> KnowledgeDocumentVersionRead:
+    visible_version = await _visible_version(session, principal, version_id)
+    operation = "knowledge.document.retry"
+    fingerprint = _knowledge_command_fingerprint(
+        operation,
+        {"version_id": str(version_id), "expected_version": payload.expected_version},
+    )
+    replay = await _knowledge_command_replay(
+        session,
+        tenant_id=principal.tenant_id,
+        operation=operation,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+        resource_id=visible_version.id,
+    )
+    if replay is not None:
+        return KnowledgeDocumentVersionRead.model_validate(replay.response_payload)
     version = await _visible_version(session, principal, version_id, for_update=True)
     revision = await _resolve_revision(session, principal, version.revision_id, draft_only=True)
     del revision
@@ -1303,12 +1520,29 @@ async def retry_document(
         )
         .with_for_update()
     )
+    background_job, _ = await enqueue_background_job(
+        session,
+        tenant_id=principal.tenant_id,
+        project_id=version.project_id,
+        created_by_user_id=principal.user_id,
+        job_type="knowledge.ingest_document",
+        queue="knowledge",
+        priority=60,
+        safe_payload={
+            "document_version_id": version.id,
+            "knowledge_base_id": version.knowledge_source_id,
+            "storage_object_id": version.storage_object_id,
+        },
+        idempotency_key=f"retry:{idempotency_key}",
+        correlation_id=request.state.correlation_id,
+    )
     if job is None:
         job = DocumentIngestionJob(
             tenant_id=principal.tenant_id,
             project_id=version.project_id,
             document_version_id=version.id,
             idempotency_key=idempotency_key,
+            background_job_id=background_job.id,
         )
         session.add(job)
     else:
@@ -1318,6 +1552,7 @@ async def retry_document(
         job.lease_token = None
         job.lease_expires_at = None
         job.safe_error_code = None
+        job.background_job_id = background_job.id
     await enqueue_realtime_event(
         session,
         tenant_id=principal.tenant_id,
@@ -1331,8 +1566,234 @@ async def retry_document(
     )
     await session.flush()
     response = await _version_read(session, version)
+    _record_knowledge_command(
+        session,
+        tenant_id=principal.tenant_id,
+        operation=operation,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+        resource_id=version.id,
+        response=response,
+    )
     await session.commit()
     return response
+
+
+async def _activate_version_storage(
+    session: SessionDep,
+    version: KnowledgeDocumentVersion,
+    storage: StorageObject,
+    *,
+    require_available: bool,
+) -> None:
+    if storage.status == "purged" or storage.retention_state == "purged":
+        if require_available:
+            raise ApiError(
+                409,
+                "knowledge_restore_original_purged",
+                "The archived original has already been purged",
+            )
+        return
+    if storage.status == "missing":
+        if require_available:
+            raise ApiError(
+                409,
+                "knowledge_restore_original_missing",
+                "The archived original is missing from private storage",
+            )
+        return
+
+    changed = False
+    if storage.status != "active":
+        storage.status = "active"
+        changed = True
+    if storage.archived_at is not None:
+        storage.archived_at = None
+        changed = True
+    if storage.retention_state != "retained":
+        storage.retention_state = "retained"
+        changed = True
+    if storage.pending_purge_at is not None:
+        storage.pending_purge_at = None
+        changed = True
+    if changed:
+        storage.lock_version += 1
+
+    candidates = list(
+        await session.scalars(
+            select(RetentionCandidate)
+            .where(
+                RetentionCandidate.tenant_id == version.tenant_id,
+                RetentionCandidate.storage_object_id == storage.id,
+                RetentionCandidate.status.in_(("eligible", "pending_purge")),
+            )
+            .with_for_update(of=RetentionCandidate)
+        )
+    )
+    for candidate in candidates:
+        candidate.status = "blocked"
+        candidate.pending_purge_at = None
+        candidate.grace_until = None
+        candidate.safe_metadata = {
+            **candidate.safe_metadata,
+            "blocked_reason": "knowledge_reference_active",
+            "document_version_id": str(version.id),
+        }
+        candidate.lock_version += 1
+
+
+async def _live_storage_reference(
+    session: SessionDep,
+    *,
+    tenant_id: UUID,
+    storage_object_id: UUID,
+    excluded_version_id: UUID | None = None,
+    published_revision_id: UUID | None = None,
+) -> KnowledgeDocumentVersion | None:
+    active_revision = (
+        KnowledgeBaseRevision.id == published_revision_id
+        if published_revision_id is not None
+        else KnowledgeSource.active_revision_id == KnowledgeBaseRevision.id
+    )
+    statement = (
+        select(KnowledgeDocumentVersion)
+        .join(
+            KnowledgeBaseRevision,
+            and_(
+                KnowledgeBaseRevision.tenant_id == KnowledgeDocumentVersion.tenant_id,
+                KnowledgeBaseRevision.id == KnowledgeDocumentVersion.revision_id,
+            ),
+        )
+        .join(
+            KnowledgeSource,
+            and_(
+                KnowledgeSource.tenant_id == KnowledgeBaseRevision.tenant_id,
+                KnowledgeSource.id == KnowledgeBaseRevision.knowledge_source_id,
+            ),
+        )
+        .where(
+            KnowledgeDocumentVersion.tenant_id == tenant_id,
+            KnowledgeDocumentVersion.storage_object_id == storage_object_id,
+            KnowledgeDocumentVersion.status != "archived",
+            or_(KnowledgeBaseRevision.status == "draft", active_revision),
+        )
+        .order_by(
+            (KnowledgeBaseRevision.id == published_revision_id).desc()
+            if published_revision_id is not None
+            else KnowledgeBaseRevision.status.desc(),
+            KnowledgeDocumentVersion.created_at.desc(),
+        )
+        .limit(1)
+    )
+    if excluded_version_id is not None:
+        statement = statement.where(KnowledgeDocumentVersion.id != excluded_version_id)
+    reference: KnowledgeDocumentVersion | None = await session.scalar(statement)
+    return reference
+
+
+def _archive_version_storage(storage: StorageObject, *, occurred_at: datetime) -> None:
+    changed = False
+    if storage.retention_state != "pending_purge" and storage.status not in {
+        "archived",
+        "missing",
+        "purged",
+    }:
+        storage.status = "archived"
+        changed = True
+    if storage.archived_at is None:
+        storage.archived_at = occurred_at
+        changed = True
+    if changed:
+        storage.lock_version += 1
+
+
+async def _recompute_source_storage_lifecycle(
+    session: SessionDep,
+    *,
+    source: KnowledgeSource,
+    published_revision_id: UUID,
+    occurred_at: datetime,
+) -> None:
+    storage_ids = list(
+        await session.scalars(
+            select(KnowledgeDocumentVersion.storage_object_id)
+            .where(
+                KnowledgeDocumentVersion.tenant_id == source.tenant_id,
+                KnowledgeDocumentVersion.knowledge_source_id == source.id,
+                KnowledgeDocumentVersion.storage_object_id.is_not(None),
+            )
+            .distinct()
+        )
+    )
+    for storage_id in storage_ids:
+        if storage_id is None:
+            continue
+        storage = await session.scalar(
+            select(StorageObject)
+            .where(
+                StorageObject.tenant_id == source.tenant_id,
+                StorageObject.id == storage_id,
+            )
+            .with_for_update(of=StorageObject)
+        )
+        if storage is None:
+            continue
+        live_reference = await _live_storage_reference(
+            session,
+            tenant_id=source.tenant_id,
+            storage_object_id=storage.id,
+            published_revision_id=published_revision_id,
+        )
+        if live_reference is None:
+            _archive_version_storage(storage, occurred_at=occurred_at)
+        else:
+            await _activate_version_storage(
+                session,
+                live_reference,
+                storage,
+                require_available=False,
+            )
+
+
+async def _sync_version_storage_lifecycle(
+    session: SessionDep,
+    version: KnowledgeDocumentVersion,
+    *,
+    restoring: bool,
+    occurred_at: datetime,
+) -> None:
+    if version.storage_object_id is None:
+        return
+    storage = await session.scalar(
+        select(StorageObject)
+        .where(
+            StorageObject.tenant_id == version.tenant_id,
+            StorageObject.id == version.storage_object_id,
+        )
+        .with_for_update(of=StorageObject)
+    )
+    if storage is None:
+        return
+    if restoring:
+        await _activate_version_storage(session, version, storage, require_available=True)
+        return
+
+    live_reference = await _live_storage_reference(
+        session,
+        tenant_id=version.tenant_id,
+        storage_object_id=storage.id,
+        excluded_version_id=version.id,
+    )
+    if live_reference is not None:
+        await _activate_version_storage(
+            session,
+            live_reference,
+            storage,
+            require_available=False,
+        )
+        return
+
+    _archive_version_storage(storage, occurred_at=occurred_at)
 
 
 @router.post("/documents/{version_id}/archive", response_model=KnowledgeDocumentVersionRead)
@@ -1343,9 +1804,22 @@ async def archive_document(
     session: SessionDep,
     principal: Principal = require_permission("knowledge:manage"),
 ) -> KnowledgeDocumentVersionRead:
+    await acquire_retention_lock(session, principal.tenant_id)
     version = await _visible_version(session, principal, version_id, for_update=True)
     await _resolve_revision(session, principal, version.revision_id, draft_only=True)
-    transition_document(version, "archived", expected_version=payload.expected_version)
+    now = datetime.now(UTC)
+    transition_document(
+        version,
+        "archived",
+        expected_version=payload.expected_version,
+        occurred_at=now,
+    )
+    await _sync_version_storage_lifecycle(
+        session,
+        version,
+        restoring=False,
+        occurred_at=now,
+    )
     document = await session.get(KnowledgeDocument, version.document_id)
     if document:
         published_copy = await session.scalar(
@@ -1363,7 +1837,7 @@ async def archive_document(
             .limit(1)
         )
         if published_copy is None:
-            document.archived_at = datetime.now(UTC)
+            document.archived_at = now
             document.is_active = False
     await write_audit(
         session,
@@ -1388,6 +1862,7 @@ async def restore_document(
     session: SessionDep,
     principal: Principal = require_permission("knowledge:manage"),
 ) -> KnowledgeDocumentVersionRead:
+    await acquire_retention_lock(session, principal.tenant_id)
     version = await _visible_version(session, principal, version_id, for_update=True)
     await _resolve_revision(session, principal, version.revision_id, draft_only=True)
     if version.status != "archived":
@@ -1412,6 +1887,12 @@ async def restore_document(
         safe_error_message=(
             "Restored document requires a new processing retry" if target == "failed" else None
         ),
+    )
+    await _sync_version_storage_lifecycle(
+        session,
+        version,
+        restoring=True,
+        occurred_at=datetime.now(UTC),
     )
     document = await session.get(KnowledgeDocument, version.document_id)
     if document:

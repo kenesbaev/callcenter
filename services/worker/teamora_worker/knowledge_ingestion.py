@@ -17,6 +17,13 @@ from docx import Document
 from minio import Minio
 from pypdf import PdfReader
 
+from teamora_worker.background_jobs import (
+    BackgroundJobClaim,
+    JobCancelled,
+    JobExecutionContext,
+    JobExecutionError,
+    JobResult,
+)
 from teamora_worker.config import WorkerSettings
 
 log = structlog.get_logger(service="worker", component="knowledge_ingestion")
@@ -315,6 +322,198 @@ class KnowledgeIngestionProcessor:
         if connection is not None and not connection.is_closed():
             await connection.close()
 
+    async def handle_background_job(
+        self,
+        background_job: BackgroundJobClaim,
+        context: JobExecutionContext,
+    ) -> JobResult:
+        """Run the existing domain pipeline under the durable BackgroundJob lease."""
+
+        async with context.pool.acquire() as connection:
+            claimed = await self.claim_linked(
+                connection,
+                background_job_id=background_job.id,
+                tenant_id=background_job.tenant_id,
+                lease_token=background_job.lease_token,
+            )
+            if claimed is None:
+                status = await self._linked_status(
+                    connection, background_job.tenant_id, background_job.id
+                )
+                if status is None:
+                    raise JobExecutionError(
+                        "knowledge_job_not_linked",
+                        "Background job has no linked document ingestion job",
+                        retryable=False,
+                    )
+                if status["status"] == "succeeded":
+                    return JobResult({"document_version_id": str(status["document_version_id"])})
+                if status["status"] == "cancelled":
+                    raise JobCancelled()
+                if status["status"] == "failed":
+                    raise JobExecutionError(
+                        str(status["safe_error_code"] or "knowledge_ingestion_failed"),
+                        "Knowledge document ingestion failed",
+                        retryable=False,
+                    )
+                retry_after = max(1.0, float(status["retry_after_seconds"] or 1.0))
+                raise JobExecutionError(
+                    "knowledge_job_not_ready",
+                    "Knowledge document ingestion is not ready to be reclaimed",
+                    retryable=True,
+                    retry_after_seconds=retry_after,
+                )
+            try:
+                await self.process(connection, claimed, execution_context=context)
+            except JobCancelled:
+                await self._cancel_linked(connection, claimed)
+                raise
+            status = await self._linked_status(
+                connection, background_job.tenant_id, background_job.id
+            )
+            if status is None:
+                raise JobExecutionError(
+                    "knowledge_job_missing",
+                    "Linked document ingestion job disappeared",
+                    retryable=False,
+                )
+            if status["status"] == "succeeded":
+                return JobResult(
+                    {
+                        "document_version_id": str(status["document_version_id"]),
+                        "stage": str(status["stage"]),
+                    }
+                )
+            if status["status"] == "pending":
+                raise JobExecutionError(
+                    str(status["safe_error_code"] or "knowledge_ingestion_retry"),
+                    "Knowledge document ingestion will be retried",
+                    retryable=True,
+                    retry_after_seconds=max(1.0, float(status["retry_after_seconds"] or 1.0)),
+                )
+            if status["status"] == "cancelled":
+                raise JobCancelled()
+            raise JobExecutionError(
+                str(status["safe_error_code"] or "knowledge_ingestion_failed"),
+                "Knowledge document ingestion failed",
+                retryable=False,
+            )
+
+    async def claim_linked(
+        self,
+        connection: asyncpg.Connection,
+        *,
+        background_job_id: UUID,
+        tenant_id: UUID,
+        lease_token: UUID,
+    ) -> ClaimedJob | None:
+        async with connection.transaction():
+            await connection.execute("SELECT set_config('app.tenant_id', $1, true)", str(tenant_id))
+            row = await connection.fetchrow(
+                """
+                SELECT job.id, job.tenant_id, job.project_id, job.document_version_id,
+                       job.attempts, job.max_attempts, version.object_key, version.file_type,
+                       version.checksum_sha256, version.language_code, version.document_id,
+                       version.revision_id, revision.embedding_provider,
+                       revision.embedding_model, revision.embedding_dimension,
+                       revision.index_version, revision.chunking_config
+                FROM document_ingestion_jobs AS job
+                JOIN knowledge_document_versions AS version
+                  ON version.tenant_id=job.tenant_id AND version.id=job.document_version_id
+                JOIN knowledge_base_revisions AS revision
+                  ON revision.tenant_id=job.tenant_id AND revision.id=version.revision_id
+                WHERE job.tenant_id=$1 AND job.background_job_id=$2
+                  AND job.next_attempt_at <= now()
+                  AND (
+                    job.status='pending' OR
+                    (job.status='processing' AND job.lease_expires_at < now())
+                  )
+                  AND job.attempts < job.max_attempts
+                FOR UPDATE OF job SKIP LOCKED
+                """,
+                tenant_id,
+                background_job_id,
+            )
+            if row is None:
+                return None
+            if not row["object_key"]:
+                await connection.execute(
+                    """
+                    UPDATE document_ingestion_jobs
+                    SET status='failed', safe_error_code='original_missing', updated_at=now()
+                    WHERE tenant_id=$1 AND id=$2
+                    """,
+                    tenant_id,
+                    row["id"],
+                )
+                return None
+            await connection.execute(
+                """
+                UPDATE document_ingestion_jobs
+                SET status='processing', stage='extracting', attempts=attempts+1,
+                    lease_token=$3, lease_expires_at=now()+($4::integer * interval '1 second'),
+                    heartbeat_at=now(), updated_at=now()
+                WHERE tenant_id=$1 AND id=$2
+                """,
+                tenant_id,
+                row["id"],
+                lease_token,
+                self.settings.knowledge_job_lease_seconds,
+            )
+            await self._set_version_status(
+                connection, tenant_id, row["document_version_id"], "extracting"
+            )
+            await self._event(
+                connection,
+                tenant_id,
+                row["project_id"],
+                row["document_version_id"],
+                "knowledge.document_processing",
+                "extracting",
+            )
+            return ClaimedJob(
+                id=row["id"],
+                tenant_id=tenant_id,
+                project_id=row["project_id"],
+                document_version_id=row["document_version_id"],
+                lease_token=lease_token,
+                attempts=row["attempts"] + 1,
+                max_attempts=row["max_attempts"],
+                object_key=row["object_key"],
+                file_type=row["file_type"],
+                checksum_sha256=row["checksum_sha256"],
+                language_code=row["language_code"],
+                document_id=row["document_id"],
+                revision_id=row["revision_id"],
+                embedding_provider=row["embedding_provider"],
+                embedding_model=row["embedding_model"],
+                embedding_dimension=row["embedding_dimension"],
+                index_version=row["index_version"],
+                chunking_config=json_object(row["chunking_config"]),
+            )
+
+    async def _linked_status(
+        self,
+        connection: asyncpg.Connection,
+        tenant_id: UUID,
+        background_job_id: UUID,
+    ) -> asyncpg.Record | None:
+        async with connection.transaction():
+            await connection.execute("SELECT set_config('app.tenant_id', $1, true)", str(tenant_id))
+            return await connection.fetchrow(
+                """
+                SELECT status, stage, document_version_id, safe_error_code,
+                       GREATEST(
+                           0,
+                           EXTRACT(EPOCH FROM (next_attempt_at-now()))
+                       ) AS retry_after_seconds
+                FROM document_ingestion_jobs
+                WHERE tenant_id=$1 AND background_job_id=$2
+                """,
+                tenant_id,
+                background_job_id,
+            )
+
     async def claim_once(self, connection: asyncpg.Connection) -> ClaimedJob | None:
         tenants = await connection.fetch("SELECT id FROM tenants ORDER BY id")
         for tenant in tenants:
@@ -408,8 +607,16 @@ class KnowledgeIngestionProcessor:
                 )
         return None
 
-    async def process(self, connection: asyncpg.Connection, job: ClaimedJob) -> None:
+    async def process(
+        self,
+        connection: asyncpg.Connection,
+        job: ClaimedJob,
+        *,
+        execution_context: JobExecutionContext | None = None,
+    ) -> None:
         try:
+            if execution_context is not None:
+                execution_context.ensure_active()
             data = await asyncio.wait_for(
                 asyncio.to_thread(self._download, job.object_key),
                 timeout=self.settings.knowledge_parser_timeout_seconds,
@@ -434,6 +641,9 @@ class KnowledgeIngestionProcessor:
                 ),
                 timeout=self.settings.knowledge_parser_timeout_seconds,
             )
+            if execution_context is not None:
+                execution_context.ensure_active()
+                await execution_context.update_progress(30, detail={"stage": "extracting"})
             await self._advance(connection, job, "chunking")
             chunks = chunk_blocks(
                 extracted.blocks,
@@ -458,6 +668,9 @@ class KnowledgeIngestionProcessor:
                 raise DocumentProcessingError(
                     "chunk_limit", "Document exceeds the configured chunk limit"
                 )
+            if execution_context is not None:
+                execution_context.ensure_active()
+                await execution_context.update_progress(60, detail={"stage": "chunking"})
             await self._advance(connection, job, "embedding")
             if job.embedding_provider != "mock" or self.settings.app_env not in {
                 "development",
@@ -470,9 +683,14 @@ class KnowledgeIngestionProcessor:
             vectors = [
                 deterministic_embedding(chunk.text, job.embedding_dimension) for chunk in chunks
             ]
+            if execution_context is not None:
+                execution_context.ensure_active()
+                await execution_context.update_progress(85, detail={"stage": "embedding"})
             await self._save_ready(connection, job, extracted, chunks, vectors)
         except NeedsOcrError as exc:
             await self._finish_special(connection, job, "needs_ocr", exc)
+        except JobExecutionError:
+            raise
         except DocumentProcessingError as exc:
             await self._fail(connection, job, exc)
         except Exception as exc:
@@ -485,6 +703,46 @@ class KnowledgeIngestionProcessor:
             )
             log.warning(
                 "knowledge_document_failed", error_type=type(exc).__name__, job_id=str(job.id)
+            )
+
+    async def _cancel_linked(
+        self,
+        connection: asyncpg.Connection,
+        job: ClaimedJob,
+    ) -> None:
+        async with connection.transaction():
+            await connection.execute(
+                "SELECT set_config('app.tenant_id', $1, true)", str(job.tenant_id)
+            )
+            await connection.execute(
+                """
+                UPDATE document_ingestion_jobs
+                SET status='cancelled', stage='failed', safe_error_code='cancelled',
+                    lease_token=NULL, lease_expires_at=NULL, heartbeat_at=now(), updated_at=now()
+                WHERE tenant_id=$1 AND id=$2 AND lease_token=$3
+                """,
+                job.tenant_id,
+                job.id,
+                job.lease_token,
+            )
+            await connection.execute(
+                """
+                UPDATE knowledge_document_versions
+                SET status='failed', safe_error_code='cancelled',
+                    safe_error_message='Document processing was cancelled',
+                    failed_at=now(), lock_version=lock_version+1, updated_at=now()
+                WHERE tenant_id=$1 AND id=$2
+                """,
+                job.tenant_id,
+                job.document_version_id,
+            )
+            await self._event(
+                connection,
+                job.tenant_id,
+                job.project_id,
+                job.document_version_id,
+                "knowledge.document_failed",
+                "failed",
             )
 
     def _download(self, key: str) -> bytes:

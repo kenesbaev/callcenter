@@ -53,6 +53,10 @@ class CleanupConnection(FakeConnection):
         self.executed.append(" ".join(query.split()))
         return "DELETE 2" if "DELETE FROM realtime_events" in query else "SELECT 1"
 
+    async def fetchval(self, query: str, *args: object) -> int:
+        self.executed.append(" ".join(query.split()))
+        return 2
+
 
 class FakeRedis:
     def __init__(self, *, fail: bool = False) -> None:
@@ -89,11 +93,12 @@ async def test_redis_failure_keeps_event_retryable_and_records_attempt() -> None
 
 
 @pytest.mark.asyncio
-async def test_retention_cleanup_deletes_only_expired_published_events() -> None:
+async def test_retention_cleanup_reports_expired_events_without_direct_delete() -> None:
     connection = CleanupConnection()
     publisher = RealtimePublisher(WorkerSettings(), FakeRedis())  # type: ignore[arg-type]
 
     assert await publisher.cleanup_expired(connection) == 2  # type: ignore[arg-type]
-    cleanup = next(query for query in connection.executed if "DELETE FROM realtime_events" in query)
+    cleanup = next(query for query in connection.executed if "SELECT count(*)" in query)
     assert "expires_at <= now()" in cleanup
     assert "publish_status = 'published'" in cleanup
+    assert not any("DELETE FROM realtime_events" in query for query in connection.executed)

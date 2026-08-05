@@ -44,6 +44,13 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "analytics:read",
             "audit:read",
             "simulator:use",
+            "jobs:read",
+            "jobs:manage",
+            "storage:read",
+            "storage:manage",
+            "retention:read",
+            "retention:manage",
+            "legal_holds:manage",
         }
     ),
     RoleName.TENANT_MANAGER: frozenset(
@@ -74,6 +81,13 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "team:read",
             "team:manage",
             "integrations:read",
+            "jobs:read",
+            "jobs:manage",
+            "storage:read",
+            "storage:manage",
+            "retention:read",
+            "retention:manage",
+            "legal_holds:manage",
         }
     ),
     RoleName.HUMAN_OPERATOR: frozenset(
@@ -92,6 +106,7 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "simulator:use",
             "analytics:self",
             "knowledge:read",
+            "jobs:own",
         }
     ),
     RoleName.ANALYST: frozenset(
@@ -104,6 +119,9 @@ PERMISSIONS_BY_ROLE: dict[RoleName, frozenset[str]] = {
             "tasks:read",
             "team:read",
             "knowledge:read",
+            "jobs:read",
+            "storage:read",
+            "retention:read",
         }
     ),
     RoleName.BILLING_ADMIN: frozenset({"billing:read", "usage:read"}),

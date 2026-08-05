@@ -8,6 +8,7 @@ import {
   type CustomerForm,
 } from "@/components/customers-view";
 import type {
+  BackgroundCustomerImport,
   Customer,
   CustomerImportPreview,
   Project,
@@ -16,6 +17,8 @@ import type {
 } from "@/lib/types";
 
 const apiRequestMock = vi.hoisted(() => vi.fn());
+const apiUploadMock = vi.hoisted(() => vi.fn());
+const idempotencyKeyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api", () => ({
   ApiClientError: class ApiClientError extends Error {
@@ -28,8 +31,13 @@ vi.mock("@/lib/api", () => ({
     }
   },
   apiRequest: apiRequestMock,
-  idempotencyKey: () => "customer-import-test-key",
+  apiUpload: apiUploadMock,
+  idempotencyKey: idempotencyKeyMock,
 }));
+
+let rejectFirstBackgroundCancel = false;
+let backgroundCancelRequestCount = 0;
+let showFailedBackgroundImport = false;
 
 const project: Project = {
   id: "3a42ad12-1e9f-4cd6-8a7e-ff6d8d178d14",
@@ -156,6 +164,39 @@ const preview: CustomerImportPreview = {
   expires_at: "2026-07-30T10:00:00Z",
 };
 
+const backgroundImport: BackgroundCustomerImport = {
+  id: "bb9cf9ac-f0e1-4d6c-af04-6a25325de224",
+  job_id: "9ae5f54d-4cb1-4ec0-a13b-c3562f07496f",
+  project_id: project.id,
+  file_name: "large-clients.csv",
+  file_type: "csv",
+  status: "staging",
+  progress: 42,
+  sheet_names: ["CSV"],
+  selected_sheet: "CSV",
+  headers: ["ФИО", "Телефон"],
+  mapping: { display_name: "ФИО", phone: "Телефон" },
+  update_rule: "skip",
+  preview_rows: [],
+  total_rows: 80_000,
+  valid_rows: 40_000,
+  invalid_rows: 1,
+  duplicate_rows: 4,
+  created: 0,
+  updated: 0,
+  skipped: 0,
+  error_count: 1,
+  safe_error_code: null,
+  processing_duration_ms: null,
+  state_version: 3,
+  can_commit: false,
+  can_cancel: true,
+  can_retry: false,
+  report_available: true,
+  created_at: "2026-08-04T08:00:00Z",
+  completed_at: null,
+};
+
 function renderCustomers(role: Role = "tenant_manager") {
   apiRequestMock.mockImplementation((path: string, init?: RequestInit) => {
     if (path === "/auth/me") {
@@ -208,6 +249,65 @@ function renderCustomers(role: Role = "tenant_manager") {
     if (path === "/customers/import/preview" && init?.method === "POST") {
       return Promise.resolve(preview);
     }
+    if (path.startsWith("/customers/import/background?")) {
+      const item = showFailedBackgroundImport
+        ? {
+            ...backgroundImport,
+            status: "failed" as const,
+            can_cancel: false,
+            can_retry: true,
+            safe_error_code: "customer_import_storage_unavailable",
+          }
+        : backgroundImport;
+      return Promise.resolve({
+        items: [item],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      });
+    }
+    if (path === `/customers/import/background/${backgroundImport.id}/status`) {
+      return Promise.resolve(
+        showFailedBackgroundImport
+          ? {
+              ...backgroundImport,
+              status: "failed" as const,
+              can_cancel: false,
+              can_retry: true,
+              safe_error_code: "customer_import_storage_unavailable",
+            }
+          : backgroundImport,
+      );
+    }
+    if (
+      path === `/customers/import/background/${backgroundImport.id}/cancel` &&
+      init?.method === "POST"
+    ) {
+      backgroundCancelRequestCount += 1;
+      if (rejectFirstBackgroundCancel && backgroundCancelRequestCount === 1) {
+        return Promise.reject(new Error("lost response"));
+      }
+      return Promise.resolve({
+        ...backgroundImport,
+        status: "cancel_requested",
+        can_cancel: false,
+        can_retry: false,
+      });
+    }
+    if (path === `/customers/import/background/${backgroundImport.id}/report`) {
+      return Promise.resolve({ url: "https://storage.example/report.csv" });
+    }
+    if (
+      path === `/customers/import/background/${backgroundImport.id}/retry` &&
+      init?.method === "POST"
+    ) {
+      return Promise.resolve({
+        ...backgroundImport,
+        status: "queued",
+        can_cancel: true,
+        can_retry: false,
+      });
+    }
     throw new Error(`Unexpected API path: ${path}`);
   });
   const queryClient = new QueryClient({
@@ -222,6 +322,12 @@ function renderCustomers(role: Role = "tenant_manager") {
 
 beforeEach(() => {
   apiRequestMock.mockReset();
+  apiUploadMock.mockReset();
+  idempotencyKeyMock.mockReset();
+  idempotencyKeyMock.mockReturnValue("customer-import-test-key");
+  rejectFirstBackgroundCancel = false;
+  backgroundCancelRequestCount = 0;
+  showFailedBackgroundImport = false;
 });
 
 describe("customer workspace", () => {
@@ -316,5 +422,87 @@ describe("customer workspace", () => {
       );
       expect(call?.[1]?.body).toBeInstanceOf(FormData);
     });
+  });
+
+  it("recovers a background import and sends an idempotent cancellation", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderCustomers();
+    fireEvent.click(await screen.findByRole("button", { name: /Импорт/ }));
+    fireEvent.click(
+      screen.getByRole("tab", { name: "Большой фоновый импорт" }),
+    );
+
+    expect(await screen.findByText("large-clients.csv")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/42% · резервное обновление/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
+
+    await waitFor(() =>
+      expect(apiRequestMock).toHaveBeenCalledWith(
+        `/customers/import/background/${backgroundImport.id}/cancel`,
+        expect.objectContaining({
+          method: "POST",
+          headers: { "Idempotency-Key": "customer-import-test-key" },
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Скачать отчёт" }));
+    await waitFor(() =>
+      expect(open).toHaveBeenCalledWith(
+        "https://storage.example/report.csv",
+        "_blank",
+        "noopener,noreferrer",
+      ),
+    );
+  });
+
+  it("reuses the cancellation key when the first response is lost", async () => {
+    rejectFirstBackgroundCancel = true;
+    idempotencyKeyMock.mockReturnValueOnce("customer-cancel-lost-response-key");
+    renderCustomers();
+    fireEvent.click(await screen.findByRole("button", { name: /Импорт/ }));
+    fireEvent.click(
+      screen.getByRole("tab", { name: "Большой фоновый импорт" }),
+    );
+
+    expect(await screen.findByText("large-clients.csv")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Отменить" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("lost response");
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
+
+    await waitFor(() => expect(backgroundCancelRequestCount).toBe(2));
+    const cancelCalls = apiRequestMock.mock.calls.filter(
+      ([path]) =>
+        path === `/customers/import/background/${backgroundImport.id}/cancel`,
+    );
+    expect(cancelCalls).toHaveLength(2);
+    expect(cancelCalls[0]?.[1]?.headers).toEqual({
+      "Idempotency-Key": "customer-cancel-lost-response-key",
+    });
+    expect(cancelCalls[1]?.[1]?.headers).toEqual(cancelCalls[0]?.[1]?.headers);
+    expect(idempotencyKeyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed background import through its domain endpoint", async () => {
+    showFailedBackgroundImport = true;
+    renderCustomers();
+    fireEvent.click(await screen.findByRole("button", { name: /Импорт/ }));
+    fireEvent.click(
+      screen.getByRole("tab", { name: "Большой фоновый импорт" }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Повторить обработку" }),
+    );
+    await waitFor(() =>
+      expect(apiRequestMock).toHaveBeenCalledWith(
+        `/customers/import/background/${backgroundImport.id}/retry`,
+        expect.objectContaining({
+          method: "POST",
+          headers: { "Idempotency-Key": "customer-import-test-key" },
+        }),
+      ),
+    );
   });
 });

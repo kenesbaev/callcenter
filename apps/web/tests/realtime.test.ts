@@ -4,6 +4,7 @@ import {
   type RealtimeEventEnvelope,
   type RealtimeStatus,
 } from "@/lib/realtime";
+import { realtimeQueryKeys } from "@/components/realtime-provider";
 
 type Listener = (event: { data?: string }) => void;
 
@@ -195,5 +196,20 @@ describe("RealtimeClient", () => {
     second.open();
     expect(statuses.at(-1)).toBe("connected");
     client.stop();
+  });
+
+  it("maps Stage 14 events to canonical REST query groups", () => {
+    expect(realtimeQueryKeys("job.progress")).toEqual([
+      ["background-jobs"],
+      ["customer-imports"],
+      ["knowledge"],
+    ]);
+    expect(realtimeQueryKeys("import.completed")).toContainEqual(["customers"]);
+    expect(realtimeQueryKeys("retention.preview_ready")).toContainEqual([
+      "retention",
+    ]);
+    expect(realtimeQueryKeys("storage.issue_detected")).toContainEqual([
+      "storage",
+    ]);
   });
 });

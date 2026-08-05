@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import zipfile
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from teamora_api.db import SessionFactory, set_tenant_context
+from teamora_api.db import SessionFactory, set_tenant_context, tenant_transaction
 from teamora_api.enums import RoleName
 from teamora_api.errors import ApiError
 from teamora_api.knowledge_files import validate_upload
 from teamora_api.main import app
 from teamora_api.models import (
+    BackgroundJob,
     DocumentIngestionJob,
     KnowledgeBaseRevision,
     KnowledgeChunk,
@@ -22,6 +25,10 @@ from teamora_api.models import (
     KnowledgeRetrievalExecution,
     KnowledgeSource,
     RealtimeEvent,
+    RetentionCandidate,
+    RetentionPolicy,
+    StorageObject,
+    TeamCommandSubmission,
 )
 from teamora_api.routers import knowledge as knowledge_router
 from teamora_api.schemas.call_flows import normalize_language_code
@@ -344,6 +351,427 @@ async def test_upload_is_idempotent_uses_server_key_and_creates_new_document_ver
             UUID(first.json()["version"]["id"]),
             UUID(second.json()["version"]["id"]),
         }
+
+
+async def test_concurrent_knowledge_commands_replay_and_reject_changed_payload(
+    client: AsyncClient,
+    unique_suffix: str,
+    register: Register,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, csrf = await register(client, unique_suffix)
+    tenant_id = UUID(str(auth["tenant"]["id"]))
+    project_id = await default_project_id(client)
+    base = await create_base(client, csrf, project_id, "Concurrent knowledge")
+    stored: list[str] = []
+
+    class Storage:
+        def __init__(self, _settings: object) -> None:
+            pass
+
+        async def put(self, *, key: str, data: bytes, content_type: str) -> None:
+            del data, content_type
+            stored.append(key)
+            await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(knowledge_router, "KnowledgeObjectStorage", Storage)
+    upload_key = f"concurrent-upload-{unique_suffix}"
+
+    async def upload(content: bytes = b"Concurrent durable upload"):
+        return await client.post(
+            "/api/v1/knowledge/documents/upload",
+            headers={"X-CSRF-Token": csrf, "Idempotency-Key": upload_key},
+            data={
+                "revision_id": base["draft_revision"]["id"],
+                "title": "Concurrent source",
+                "language": "en",
+            },
+            files={"file": ("concurrent.txt", content, "text/plain")},
+        )
+
+    first, replay = await asyncio.gather(upload(), upload())
+    assert first.status_code == replay.status_code == 201
+    assert replay.json() == first.json()
+    assert len(stored) == 1
+    changed = await upload(b"Changed request body under the same command key")
+    assert changed.status_code == 409
+    assert changed.json()["error"]["code"] == "idempotency_key_reused"
+    assert len(stored) == 1
+
+    embedding_calls = 0
+    original_embedding_provider = knowledge_router.embedding_provider
+
+    def counting_embedding_provider(**parameters: object):
+        provider = original_embedding_provider(**parameters)  # type: ignore[arg-type]
+        original_embed = provider.embed
+
+        async def counted_embed(texts: list[str]) -> list[list[float]]:
+            nonlocal embedding_calls
+            embedding_calls += 1
+            return await original_embed(texts)
+
+        provider.embed = counted_embed  # type: ignore[method-assign]
+        return provider
+
+    monkeypatch.setattr(knowledge_router, "embedding_provider", counting_embedding_provider)
+    text_key = f"concurrent-text-{unique_suffix}"
+    text_payload = {
+        "project_id": project_id,
+        "knowledge_base_id": base["id"],
+        "language": "en",
+        "title": "Concurrent text",
+        "content": "One deterministic embedding operation must serve every logical retry.",
+    }
+    first_text, replay_text = await asyncio.gather(
+        client.post(
+            "/api/v1/knowledge/text",
+            headers={"X-CSRF-Token": csrf, "Idempotency-Key": text_key},
+            json=text_payload,
+        ),
+        client.post(
+            "/api/v1/knowledge/text",
+            headers={"X-CSRF-Token": csrf, "Idempotency-Key": text_key},
+            json=text_payload,
+        ),
+    )
+    assert first_text.status_code == replay_text.status_code == 201
+    assert replay_text.json() == first_text.json()
+    assert embedding_calls == 1
+    changed_text = await client.post(
+        "/api/v1/knowledge/text",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": text_key},
+        json={**text_payload, "title": "Changed title"},
+    )
+    assert changed_text.status_code == 409
+    assert changed_text.json()["error"]["code"] == "idempotency_key_reused"
+
+    async with SessionFactory() as session:
+        await set_tenant_context(session, tenant_id)
+        submissions = list(
+            await session.scalars(
+                select(TeamCommandSubmission).where(
+                    TeamCommandSubmission.tenant_id == tenant_id,
+                    TeamCommandSubmission.idempotency_key.in_([upload_key, text_key]),
+                )
+            )
+        )
+        assert {item.operation for item in submissions} == {
+            "knowledge.document.upload",
+            "knowledge.text.create",
+        }
+        assert all(len(item.request_fingerprint) == 64 for item in submissions)
+        uploaded_versions = list(
+            await session.scalars(
+                select(KnowledgeDocumentVersion).where(
+                    KnowledgeDocumentVersion.tenant_id == tenant_id,
+                    KnowledgeDocumentVersion.title_snapshot == "Concurrent source",
+                )
+            )
+        )
+        assert len(uploaded_versions) == 1
+        version_ids = [UUID(first.json()["version"]["id"]), UUID(first_text.json()["version"]["id"])]
+        chunks = list(
+            await session.scalars(
+                select(KnowledgeChunk).where(KnowledgeChunk.document_version_id.in_(version_ids))
+            )
+        )
+        assert {chunk.document_version_id for chunk in chunks} == {version_ids[1]}
+
+
+async def test_retry_document_has_durable_exact_replay(
+    client: AsyncClient,
+    unique_suffix: str,
+    register: Register,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, csrf = await register(client, unique_suffix)
+    tenant_id = UUID(str(auth["tenant"]["id"]))
+    project_id = await default_project_id(client)
+    base = await create_base(client, csrf, project_id, "Retry knowledge")
+
+    class Storage:
+        def __init__(self, _settings: object) -> None:
+            pass
+
+        async def put(self, *, key: str, data: bytes, content_type: str) -> None:
+            del key, data, content_type
+
+    monkeypatch.setattr(knowledge_router, "KnowledgeObjectStorage", Storage)
+    uploaded = await client.post(
+        "/api/v1/knowledge/documents/upload",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": f"retry-source-{unique_suffix}",
+        },
+        data={
+            "revision_id": base["draft_revision"]["id"],
+            "title": "Retry source",
+            "language": "en",
+        },
+        files={"file": ("retry.txt", b"Document which will be retried", "text/plain")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    version_id = UUID(uploaded.json()["version"]["id"])
+    async with tenant_transaction(tenant_id) as session:
+        version = await session.get(KnowledgeDocumentVersion, version_id)
+        assert version is not None
+        version.status = "failed"
+        version.safe_error_code = "test_failure"
+        version.lock_version += 1
+        expected_version = version.lock_version
+        ingestion = await session.scalar(
+            select(DocumentIngestionJob).where(
+                DocumentIngestionJob.tenant_id == tenant_id,
+                DocumentIngestionJob.document_version_id == version_id,
+            )
+        )
+        assert ingestion is not None
+        ingestion.status = "failed"
+        if ingestion.background_job_id is not None:
+            background = await session.get(BackgroundJob, ingestion.background_job_id)
+            assert background is not None
+            background.status = "failed"
+
+    retry_key = f"retry-command-{unique_suffix}"
+    headers = {"X-CSRF-Token": csrf, "Idempotency-Key": retry_key}
+    first = await client.post(
+        f"/api/v1/knowledge/documents/{version_id}/retry",
+        headers=headers,
+        json={"expected_version": expected_version},
+    )
+    assert first.status_code == 200, first.text
+    replay = await client.post(
+        f"/api/v1/knowledge/documents/{version_id}/retry",
+        headers=headers,
+        json={"expected_version": expected_version},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == first.json()
+    changed = await client.post(
+        f"/api/v1/knowledge/documents/{version_id}/retry",
+        headers=headers,
+        json={"expected_version": expected_version + 1},
+    )
+    assert changed.status_code == 409
+    assert changed.json()["error"]["code"] == "idempotency_key_reused"
+    async with SessionFactory() as session:
+        await set_tenant_context(session, tenant_id)
+        submission = await session.scalar(
+            select(TeamCommandSubmission).where(
+                TeamCommandSubmission.tenant_id == tenant_id,
+                TeamCommandSubmission.idempotency_key == retry_key,
+            )
+        )
+        assert submission is not None
+        assert submission.operation == "knowledge.document.retry"
+        retry_jobs = list(
+            await session.scalars(
+                select(BackgroundJob).where(
+                    BackgroundJob.tenant_id == tenant_id,
+                    BackgroundJob.idempotency_key == f"retry:{retry_key}",
+                )
+            )
+        )
+        assert len(retry_jobs) == 1
+
+
+async def test_archive_preserves_current_published_storage_until_draft_publish(
+    client: AsyncClient,
+    unique_suffix: str,
+    register: Register,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, csrf = await register(client, unique_suffix)
+    tenant_id = UUID(str(auth["tenant"]["id"]))
+    project_id = await default_project_id(client)
+    base = await create_base(client, csrf, project_id)
+
+    class Storage:
+        def __init__(self, _settings: object) -> None:
+            pass
+
+        async def put(self, *, key: str, data: bytes, content_type: str) -> None:
+            del key, data, content_type
+
+    monkeypatch.setattr(knowledge_router, "KnowledgeObjectStorage", Storage)
+    await add_text(
+        client,
+        csrf,
+        project_id=project_id,
+        base_id=base["id"],
+        language="en",
+        title="Remaining published document",
+        content="This document keeps the next draft publishable after removing the original.",
+        key=f"remaining-published-{unique_suffix}",
+    )
+    uploaded = await client.post(
+        "/api/v1/knowledge/documents/upload",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": f"shared-original-{unique_suffix}",
+        },
+        data={
+            "revision_id": base["draft_revision"]["id"],
+            "title": "Published original",
+            "language": "en",
+        },
+        files={"file": ("published.txt", b"Published original contents", "text/plain")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    published_version_id = UUID(uploaded.json()["version"]["id"])
+    async with tenant_transaction(tenant_id) as session:
+        version = await session.get(KnowledgeDocumentVersion, published_version_id)
+        assert version is not None
+        version.status = "ready"
+        version.normalized_text = "Published original contents"
+        version.ready_at = datetime.now(UTC)
+
+    await publish_base(client, csrf, base["id"])
+    draft = await client.post(
+        f"/api/v1/knowledge/bases/{base['id']}/draft",
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert draft.status_code == 201, draft.text
+    async with tenant_transaction(tenant_id) as session:
+        cloned = await session.scalar(
+            select(KnowledgeDocumentVersion).where(
+                KnowledgeDocumentVersion.tenant_id == tenant_id,
+                KnowledgeDocumentVersion.revision_id == UUID(draft.json()["id"]),
+                KnowledgeDocumentVersion.storage_object_id.is_not(None),
+            )
+        )
+        assert cloned is not None
+        clone_id = cloned.id
+        clone_version = cloned.lock_version
+        storage_id = cloned.storage_object_id
+        assert storage_id is not None
+
+    archived = await client.post(
+        f"/api/v1/knowledge/documents/{clone_id}/archive",
+        headers={"X-CSRF-Token": csrf},
+        json={"expected_version": clone_version},
+    )
+    assert archived.status_code == 200, archived.text
+    async with tenant_transaction(tenant_id) as session:
+        storage = await session.get(StorageObject, storage_id)
+        assert storage is not None
+        assert storage.status == "active"
+        assert storage.archived_at is None
+        assert storage.retention_state == "retained"
+
+    republished = await publish_base(client, csrf, base["id"])
+    assert republished["id"] == draft.json()["id"]
+    async with tenant_transaction(tenant_id) as session:
+        storage = await session.get(StorageObject, storage_id)
+        assert storage is not None
+        assert storage.status == "archived"
+        assert storage.archived_at is not None
+
+
+async def test_restore_reactivates_storage_and_blocks_pending_candidate(
+    client: AsyncClient,
+    unique_suffix: str,
+    register: Register,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, csrf = await register(client, unique_suffix)
+    tenant_id = UUID(str(auth["tenant"]["id"]))
+    project_id = await default_project_id(client)
+    base = await create_base(client, csrf, project_id)
+
+    class Storage:
+        def __init__(self, _settings: object) -> None:
+            pass
+
+        async def put(self, *, key: str, data: bytes, content_type: str) -> None:
+            del key, data, content_type
+
+    monkeypatch.setattr(knowledge_router, "KnowledgeObjectStorage", Storage)
+    uploaded = await client.post(
+        "/api/v1/knowledge/documents/upload",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": f"restore-original-{unique_suffix}",
+        },
+        data={
+            "revision_id": base["draft_revision"]["id"],
+            "title": "Restorable original",
+            "language": "en",
+        },
+        files={"file": ("restore.txt", b"Restorable original contents", "text/plain")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    version_id = UUID(uploaded.json()["version"]["id"])
+    archived = await client.post(
+        f"/api/v1/knowledge/documents/{version_id}/archive",
+        headers={"X-CSRF-Token": csrf},
+        json={"expected_version": uploaded.json()["version"]["lock_version"]},
+    )
+    assert archived.status_code == 200, archived.text
+
+    now = datetime.now(UTC)
+    async with tenant_transaction(tenant_id) as session:
+        version = await session.get(KnowledgeDocumentVersion, version_id)
+        policy = await session.scalar(
+            select(RetentionPolicy).where(
+                RetentionPolicy.tenant_id == tenant_id,
+                RetentionPolicy.project_id.is_(None),
+            )
+        )
+        assert version is not None
+        assert policy is not None
+        assert version.storage_object_id is not None
+        storage = await session.get(StorageObject, version.storage_object_id)
+        assert storage is not None
+        assert storage.status == "archived"
+        assert storage.archived_at is not None
+        storage.status = "pending_purge"
+        storage.retention_state = "pending_purge"
+        storage.pending_purge_at = now
+        candidate = RetentionCandidate(
+            tenant_id=tenant_id,
+            project_id=UUID(project_id),
+            policy_id=policy.id,
+            storage_object_id=storage.id,
+            category="knowledge_original",
+            resource_type="knowledge_document_version",
+            resource_id=version.id,
+            policy_version=policy.policy_version,
+            status="pending_purge",
+            eligible_at=now,
+            pending_purge_at=now,
+            grace_until=now + timedelta(days=policy.grace_period_days),
+            idempotency_key=f"knowledge-restore-candidate-{unique_suffix}",
+            safe_metadata={},
+            lock_version=1,
+        )
+        session.add(candidate)
+        await session.flush()
+        candidate_id = candidate.id
+
+    restored = await client.post(
+        f"/api/v1/knowledge/documents/{version_id}/restore",
+        headers={"X-CSRF-Token": csrf},
+        json={"expected_version": archived.json()["lock_version"]},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["status"] == "failed"
+    async with tenant_transaction(tenant_id) as session:
+        version = await session.get(KnowledgeDocumentVersion, version_id)
+        assert version is not None
+        assert version.storage_object_id is not None
+        storage = await session.get(StorageObject, version.storage_object_id)
+        candidate = await session.get(RetentionCandidate, candidate_id)
+        assert storage is not None
+        assert candidate is not None
+        assert storage.status == "active"
+        assert storage.archived_at is None
+        assert storage.retention_state == "retained"
+        assert storage.pending_purge_at is None
+        assert candidate.status == "blocked"
+        assert candidate.pending_purge_at is None
+        assert candidate.grace_until is None
+        assert candidate.safe_metadata["blocked_reason"] == "knowledge_reference_active"
 
 
 async def test_immutable_revision_new_draft_and_historical_citation(

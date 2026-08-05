@@ -19,6 +19,7 @@ from teamora_api.realtime_hub import get_realtime_runtime
 from teamora_api.routers import (
     analytics,
     auth,
+    background,
     call_flows,
     call_results,
     callbacks,
@@ -80,6 +81,7 @@ app.add_middleware(CorrelationMiddleware)
 api_v1_prefix = "/api/v1"
 app.include_router(auth.router, prefix=api_v1_prefix)
 app.include_router(health.router, prefix=api_v1_prefix)
+app.include_router(background.router, prefix=api_v1_prefix)
 app.include_router(tenants.router, prefix=api_v1_prefix)
 app.include_router(operators.router, prefix=api_v1_prefix)
 app.include_router(projects.router, prefix=api_v1_prefix)

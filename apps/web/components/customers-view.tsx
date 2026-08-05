@@ -27,8 +27,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button, StatusBadge } from "@teamora/ui";
+import { CustomerBackgroundImport } from "@/components/customer-background-import";
 import { QueryError, SectionSkeleton } from "@/components/query-state";
 import { ApiClientError, apiRequest, idempotencyKey } from "@/lib/api";
+import { customerImportFields } from "@/lib/customer-import";
 import type {
   AuthResponse,
   Customer,
@@ -86,24 +88,6 @@ const languageLabels: Record<string, string> = {
   en: "English",
   kaa: "Qaraqalpaqsha",
 };
-
-const importFields = [
-  ["display_name", "ФИО"],
-  ["phone", "Основной телефон"],
-  ["alternate_phone", "Дополнительный телефон"],
-  ["email", "Основной e-mail"],
-  ["external_reference", "Внешний ID"],
-  ["preferred_language", "Язык"],
-  ["city", "Город"],
-  ["region", "Регион"],
-  ["address", "Адрес"],
-  ["job_title", "Должность"],
-  ["organization", "Организация"],
-  ["tags", "Теги"],
-  ["description", "Описание"],
-  ["source", "Источник"],
-  ["next_contact_at", "Следующий контакт"],
-] as const;
 
 export function canManageCustomers(role: Role | undefined): boolean {
   return role === "tenant_owner" || role === "tenant_manager";
@@ -346,6 +330,9 @@ export function CustomersView() {
   const [submitError, setSubmitError] = useState("");
   const [success, setSuccess] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const [importMode, setImportMode] = useState<"synchronous" | "background">(
+    "synchronous",
+  );
   const [fieldOpen, setFieldOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importProject, setImportProject] = useState("");
@@ -830,8 +817,8 @@ export function CustomersView() {
             <div>
               <h2>Импорт CSV/XLSX</h2>
               <p>
-                До подтверждения клиенты в базу не записываются. Лимит — 2 МБ и
-                500 строк на лист.
+                До atomic finalization клиенты в базу не записываются.
+                Синхронный режим — до 2 МБ и 500 строк, фоновый — до 25 МБ.
               </p>
             </div>
             <button
@@ -843,213 +830,246 @@ export function CustomersView() {
               <X size={18} />
             </button>
           </div>
-          <div className="customer-import-upload">
-            <div className="field">
-              <label htmlFor="import-project">Проект</label>
-              <select
-                id="import-project"
-                onChange={(event) => setImportProject(event.target.value)}
-                value={importProject}
-              >
-                {projects.data?.items
-                  .filter((project) => project.status === "active")
-                  .map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-              </select>
-            </div>
-            <label className="customer-file-control">
-              <FileSpreadsheet size={22} />
-              <span>{importFile?.name ?? "Выберите CSV или XLSX"}</span>
-              <input
-                accept=".csv,.xlsx"
-                onChange={(event) =>
-                  setImportFile(event.target.files?.[0] ?? null)
-                }
-                type="file"
-              />
-            </label>
-            <Button
-              disabled={!importFile || createPreview.isPending}
-              onClick={() => createPreview.mutate()}
+          <div className="customer-import-mode" role="tablist">
+            <button
+              aria-selected={importMode === "synchronous"}
+              onClick={() => setImportMode("synchronous")}
+              role="tab"
+              type="button"
             >
-              <Upload size={16} />{" "}
-              {createPreview.isPending ? "Проверяем…" : "Создать preview"}
-            </Button>
+              Быстрый импорт
+            </button>
+            <button
+              aria-selected={importMode === "background"}
+              onClick={() => setImportMode("background")}
+              role="tab"
+              type="button"
+            >
+              Большой фоновый импорт
+            </button>
           </div>
-          {importError && (
-            <div className="form-error" role="alert">
-              {importError}
-            </div>
-          )}
-          {importPreview && !importReport && (
-            <div className="customer-import-preview">
-              <div className="customer-import-summary">
-                <StatusBadge>{importPreview.total_rows} строк</StatusBadge>
-                <StatusBadge tone="success">
-                  {importPreview.valid_rows} готово
-                </StatusBadge>
-                <StatusBadge tone="warning">
-                  {importPreview.duplicate_rows} дублей
-                </StatusBadge>
-                <StatusBadge tone="danger">
-                  {importPreview.error_rows} ошибок
-                </StatusBadge>
-              </div>
-              {importPreview.sheet_names.length > 1 && (
+          {importMode === "synchronous" ? (
+            <>
+              <div className="customer-import-upload">
                 <div className="field">
-                  <label htmlFor="import-sheet">Лист XLSX</label>
+                  <label htmlFor="import-project">Проект</label>
                   <select
-                    id="import-sheet"
-                    onChange={(event) =>
-                      updatePreview.mutate({
-                        mapping: importPreview.mapping,
-                        sheet: event.target.value,
-                        rule: importPreview.update_rule,
-                      })
-                    }
-                    value={importPreview.selected_sheet}
+                    id="import-project"
+                    onChange={(event) => setImportProject(event.target.value)}
+                    value={importProject}
                   >
-                    {importPreview.sheet_names.map((sheet) => (
-                      <option key={sheet} value={sheet}>
-                        {sheet}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div className="customer-mapping-grid">
-                {[
-                  ...importFields,
-                  ...(fieldDefinitions.data
-                    ?.filter((field) => field.is_active)
-                    .map(
-                      (field) => [`custom.${field.key}`, field.name] as const,
-                    ) ?? []),
-                ].map(([field, label]) => (
-                  <div className="field" key={field}>
-                    <label htmlFor={`mapping-${field}`}>{label}</label>
-                    <select
-                      id={`mapping-${field}`}
-                      onChange={(event) => {
-                        const mapping = { ...importPreview.mapping };
-                        if (event.target.value)
-                          mapping[field] = event.target.value;
-                        else delete mapping[field];
-                        updatePreview.mutate({
-                          mapping,
-                          sheet: importPreview.selected_sheet,
-                          rule: importPreview.update_rule,
-                        });
-                      }}
-                      value={importPreview.mapping[field] ?? ""}
-                    >
-                      <option value="">Не импортировать</option>
-                      {importPreview.headers.map((header) => (
-                        <option key={header} value={header}>
-                          {header}
+                    {projects.data?.items
+                      .filter((project) => project.status === "active")
+                      .map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
                         </option>
                       ))}
-                    </select>
-                  </div>
-                ))}
-              </div>
-              <div className="customer-import-rule">
-                <label>
+                  </select>
+                </div>
+                <label className="customer-file-control">
+                  <FileSpreadsheet size={22} />
+                  <span>{importFile?.name ?? "Выберите CSV или XLSX"}</span>
                   <input
-                    checked={importPreview.update_rule === "skip"}
-                    onChange={() =>
-                      updatePreview.mutate({
-                        mapping: importPreview.mapping,
-                        sheet: importPreview.selected_sheet,
-                        rule: "skip",
-                      })
+                    accept=".csv,.xlsx"
+                    onChange={(event) =>
+                      setImportFile(event.target.files?.[0] ?? null)
                     }
-                    type="radio"
-                  />{" "}
-                  Пропускать дубли
+                    type="file"
+                  />
                 </label>
-                <label>
-                  <input
-                    checked={importPreview.update_rule === "update"}
-                    onChange={() =>
-                      updatePreview.mutate({
-                        mapping: importPreview.mapping,
-                        sheet: importPreview.selected_sheet,
-                        rule: "update",
-                      })
-                    }
-                    type="radio"
-                  />{" "}
-                  Обновлять найденных клиентов
-                </label>
-              </div>
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Строка</th>
-                      <th>ФИО</th>
-                      <th>Статус проверки</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {importPreview.rows.map((row) => (
-                      <tr key={row.row_number}>
-                        <td>{row.row_number}</td>
-                        <td>{String(row.values.display_name ?? "—")}</td>
-                        <td>
-                          {row.errors.length ? (
-                            <span className="table-error">
-                              {row.errors.join("; ")}
-                            </span>
-                          ) : row.duplicate_fields.length ? (
-                            <span className="table-warning">
-                              Дубликат: {row.duplicate_fields.join(", ")}
-                            </span>
-                          ) : (
-                            <span className="table-success">Готово</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="customer-import-actions">
                 <Button
-                  disabled={
-                    commitImport.isPending ||
-                    updatePreview.isPending ||
-                    !commitKey
-                  }
-                  onClick={() => commitImport.mutate()}
+                  disabled={!importFile || createPreview.isPending}
+                  onClick={() => createPreview.mutate()}
                 >
-                  <Download size={16} />{" "}
-                  {commitImport.isPending
-                    ? "Импортируем…"
-                    : "Подтвердить импорт"}
+                  <Upload size={16} />{" "}
+                  {createPreview.isPending ? "Проверяем…" : "Создать preview"}
                 </Button>
               </div>
-            </div>
-          )}
-          {importReport && (
-            <div className="customer-import-report">
-              <Check size={24} />
-              <div>
-                <h3>Импорт завершён</h3>
-                <p>
-                  Создано: {importReport.created} · Обновлено:{" "}
-                  {importReport.updated} · Пропущено: {importReport.skipped} ·
-                  Дубли: {importReport.duplicates}
-                </p>
-                {importReport.errors.length > 0 && (
-                  <small>Строк с ошибками: {importReport.errors.length}</small>
-                )}
-              </div>
-            </div>
+              {importError && (
+                <div className="form-error" role="alert">
+                  {importError}
+                </div>
+              )}
+              {importPreview && !importReport && (
+                <div className="customer-import-preview">
+                  <div className="customer-import-summary">
+                    <StatusBadge>{importPreview.total_rows} строк</StatusBadge>
+                    <StatusBadge tone="success">
+                      {importPreview.valid_rows} готово
+                    </StatusBadge>
+                    <StatusBadge tone="warning">
+                      {importPreview.duplicate_rows} дублей
+                    </StatusBadge>
+                    <StatusBadge tone="danger">
+                      {importPreview.error_rows} ошибок
+                    </StatusBadge>
+                  </div>
+                  {importPreview.sheet_names.length > 1 && (
+                    <div className="field">
+                      <label htmlFor="import-sheet">Лист XLSX</label>
+                      <select
+                        id="import-sheet"
+                        onChange={(event) =>
+                          updatePreview.mutate({
+                            mapping: importPreview.mapping,
+                            sheet: event.target.value,
+                            rule: importPreview.update_rule,
+                          })
+                        }
+                        value={importPreview.selected_sheet}
+                      >
+                        {importPreview.sheet_names.map((sheet) => (
+                          <option key={sheet} value={sheet}>
+                            {sheet}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="customer-mapping-grid">
+                    {[
+                      ...customerImportFields,
+                      ...(fieldDefinitions.data
+                        ?.filter((field) => field.is_active)
+                        .map(
+                          (field) =>
+                            [`custom.${field.key}`, field.name] as const,
+                        ) ?? []),
+                    ].map(([field, label]) => (
+                      <div className="field" key={field}>
+                        <label htmlFor={`mapping-${field}`}>{label}</label>
+                        <select
+                          id={`mapping-${field}`}
+                          onChange={(event) => {
+                            const mapping = { ...importPreview.mapping };
+                            if (event.target.value)
+                              mapping[field] = event.target.value;
+                            else delete mapping[field];
+                            updatePreview.mutate({
+                              mapping,
+                              sheet: importPreview.selected_sheet,
+                              rule: importPreview.update_rule,
+                            });
+                          }}
+                          value={importPreview.mapping[field] ?? ""}
+                        >
+                          <option value="">Не импортировать</option>
+                          {importPreview.headers.map((header) => (
+                            <option key={header} value={header}>
+                              {header}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="customer-import-rule">
+                    <label>
+                      <input
+                        checked={importPreview.update_rule === "skip"}
+                        onChange={() =>
+                          updatePreview.mutate({
+                            mapping: importPreview.mapping,
+                            sheet: importPreview.selected_sheet,
+                            rule: "skip",
+                          })
+                        }
+                        type="radio"
+                      />{" "}
+                      Пропускать дубли
+                    </label>
+                    <label>
+                      <input
+                        checked={importPreview.update_rule === "update"}
+                        onChange={() =>
+                          updatePreview.mutate({
+                            mapping: importPreview.mapping,
+                            sheet: importPreview.selected_sheet,
+                            rule: "update",
+                          })
+                        }
+                        type="radio"
+                      />{" "}
+                      Обновлять найденных клиентов
+                    </label>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Строка</th>
+                          <th>ФИО</th>
+                          <th>Статус проверки</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importPreview.rows.map((row) => (
+                          <tr key={row.row_number}>
+                            <td>{row.row_number}</td>
+                            <td>{String(row.values.display_name ?? "—")}</td>
+                            <td>
+                              {row.errors.length ? (
+                                <span className="table-error">
+                                  {row.errors.join("; ")}
+                                </span>
+                              ) : row.duplicate_fields.length ? (
+                                <span className="table-warning">
+                                  Дубликат: {row.duplicate_fields.join(", ")}
+                                </span>
+                              ) : (
+                                <span className="table-success">Готово</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="customer-import-actions">
+                    <Button
+                      disabled={
+                        commitImport.isPending ||
+                        updatePreview.isPending ||
+                        !commitKey
+                      }
+                      onClick={() => commitImport.mutate()}
+                    >
+                      <Download size={16} />{" "}
+                      {commitImport.isPending
+                        ? "Импортируем…"
+                        : "Подтвердить импорт"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {importReport && (
+                <div className="customer-import-report">
+                  <Check size={24} />
+                  <div>
+                    <h3>Импорт завершён</h3>
+                    <p>
+                      Создано: {importReport.created} · Обновлено:{" "}
+                      {importReport.updated} · Пропущено: {importReport.skipped}{" "}
+                      · Дубли: {importReport.duplicates}
+                    </p>
+                    {importReport.errors.length > 0 && (
+                      <small>
+                        Строк с ошибками: {importReport.errors.length}
+                      </small>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <CustomerBackgroundImport
+              defaultProjectId={importProject || projectFilter}
+              onCustomersChanged={() =>
+                queryClient.invalidateQueries({ queryKey: ["customers"] })
+              }
+              projects={projects.data?.items ?? []}
+            />
           )}
         </section>
       )}

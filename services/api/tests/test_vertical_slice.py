@@ -40,7 +40,10 @@ async def test_vertical_development_slice(
 
     response = await client.post(
         "/api/v1/knowledge/text",
-        headers={"X-CSRF-Token": csrf},
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": f"vertical-knowledge-{unique_suffix}",
+        },
         json={
             "title": "Working hours",
             "language": "ru",

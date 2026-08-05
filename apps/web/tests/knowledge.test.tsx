@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeView } from "@/components/knowledge-view";
 import type {
@@ -12,6 +18,7 @@ import type {
 
 const apiRequestMock = vi.hoisted(() => vi.fn());
 const apiUploadMock = vi.hoisted(() => vi.fn());
+const idempotencyKeyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api", () => ({
   ApiClientError: class ApiClientError extends Error {
@@ -25,7 +32,7 @@ vi.mock("@/lib/api", () => ({
   },
   apiRequest: apiRequestMock,
   apiUpload: apiUploadMock,
-  idempotencyKey: () => "knowledge-test-idempotency",
+  idempotencyKey: idempotencyKeyMock,
 }));
 
 const project = {
@@ -103,6 +110,28 @@ const document: KnowledgeDocument = {
     safe_error_message: null,
     lock_version: 5,
     created_at: "2026-08-03T10:00:00Z",
+    background_job: {
+      id: "job-id",
+      project_id: project.id,
+      type: "knowledge_ingestion",
+      queue: "knowledge",
+      priority: 50,
+      status: "running",
+      progress: 67,
+      attempt_count: 1,
+      max_attempts: 4,
+      scheduled_at: null,
+      available_at: "2026-08-03T10:00:00Z",
+      started_at: "2026-08-03T10:00:01Z",
+      completed_at: null,
+      cancelled_at: null,
+      safe_error_code: null,
+      state_version: 2,
+      created_at: "2026-08-03T10:00:00Z",
+      updated_at: "2026-08-03T10:00:02Z",
+      can_cancel: false,
+      can_retry: false,
+    },
   },
 };
 
@@ -147,7 +176,10 @@ function auth(role: AuthResponse["user"]["role"]): AuthResponse {
   };
 }
 
-function mockApi(role: AuthResponse["user"]["role"] = "tenant_owner") {
+function mockApi(
+  role: AuthResponse["user"]["role"] = "tenant_owner",
+  visibleDocument: KnowledgeDocument = document,
+) {
   apiRequestMock.mockImplementation((path: string, init?: RequestInit) => {
     if (path === "/auth/me") return Promise.resolve(auth(role));
     if (path === "/projects?limit=100")
@@ -170,7 +202,7 @@ function mockApi(role: AuthResponse["user"]["role"] = "tenant_owner") {
       );
     if (path.startsWith("/knowledge/documents?"))
       return Promise.resolve({
-        items: [document],
+        items: [visibleDocument],
         total: 1,
         limit: 100,
         offset: 0,
@@ -205,6 +237,11 @@ function renderKnowledge() {
 beforeEach(() => {
   apiRequestMock.mockReset();
   apiUploadMock.mockReset();
+  idempotencyKeyMock.mockReset();
+  idempotencyKeyMock.mockImplementation(
+    (prefix: string) =>
+      `${prefix}-logical-${idempotencyKeyMock.mock.calls.length}`,
+  );
 });
 
 describe("knowledge workspace", () => {
@@ -215,6 +252,9 @@ describe("knowledge workspace", () => {
     expect(await screen.findByText("Рабочее время")).toBeInTheDocument();
     expect(screen.getByText(/2 стр/)).toBeInTheDocument();
     expect(screen.getByText(/3 chunks/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Общая очередь: 67% · попытка 1\/4/),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Опубликовать/ }));
     await waitFor(() =>
       expect(apiRequestMock).toHaveBeenCalledWith(
@@ -267,6 +307,122 @@ describe("knowledge workspace", () => {
       await screen.findByText(/Браузер загрузил 100%/),
     ).toBeInTheDocument();
     expect(screen.getByText(/Фоновая обработка показана/)).toBeInTheDocument();
+  });
+
+  it("keeps one logical key while a text mutation is retried after a lost response", async () => {
+    mockApi();
+    const baseImplementation = apiRequestMock.getMockImplementation()!;
+    apiRequestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/knowledge/text" && init?.method === "POST")
+        return Promise.reject(new Error("response lost"));
+      return baseImplementation(path, init);
+    });
+    renderKnowledge();
+    const heading = await screen.findByRole("heading", {
+      name: "Текстовый документ",
+    });
+    const form = heading.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.change(within(form!).getByLabelText("Название"), {
+      target: { value: "Идемпотентный текст" },
+    });
+    fireEvent.change(within(form!).getByLabelText("Текст"), {
+      target: {
+        value:
+          "Один логический запрос должен сохранять ключ после потери ответа.",
+      },
+    });
+    const submit = within(form!).getByRole("button", {
+      name: "Добавить текст",
+    });
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(
+        apiRequestMock.mock.calls.filter(
+          ([path]) => path === "/knowledge/text",
+        ),
+      ).toHaveLength(1),
+    );
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(
+        apiRequestMock.mock.calls.filter(
+          ([path]) => path === "/knowledge/text",
+        ),
+      ).toHaveLength(2),
+    );
+    const calls = apiRequestMock.mock.calls.filter(
+      ([path]) => path === "/knowledge/text",
+    );
+    expect(calls[0]?.[1]?.headers).toEqual(calls[1]?.[1]?.headers);
+    expect(idempotencyKeyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps one logical key while a file upload is retried", async () => {
+    mockApi();
+    apiUploadMock.mockRejectedValue(new Error("response lost"));
+    renderKnowledge();
+    const fileInput = await screen.findByLabelText(
+      /Выберите или перетащите файл/,
+    );
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(["durable upload"], "durable.txt", {
+            type: "text/plain",
+            lastModified: 1_785_840_000_000,
+          }),
+        ],
+      },
+    });
+    const submit = screen.getByRole("button", { name: "Загрузить" });
+    fireEvent.click(submit);
+    await waitFor(() => expect(apiUploadMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(submit);
+    await waitFor(() => expect(apiUploadMock).toHaveBeenCalledTimes(2));
+    expect(apiUploadMock.mock.calls[0]?.[2]).toEqual(
+      apiUploadMock.mock.calls[1]?.[2],
+    );
+    expect(idempotencyKeyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps one logical key while document retry is repeated", async () => {
+    const failedDocument: KnowledgeDocument = {
+      ...document,
+      version: { ...document.version!, status: "failed" },
+    };
+    mockApi("tenant_owner", failedDocument);
+    const baseImplementation = apiRequestMock.getMockImplementation()!;
+    apiRequestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith("/retry") && init?.method === "POST")
+        return Promise.reject(new Error("response lost"));
+      return baseImplementation(path, init);
+    });
+    renderKnowledge();
+    const retryButton = await screen.findByRole("button", {
+      name: /Повторить/,
+    });
+    fireEvent.click(retryButton);
+    await waitFor(() =>
+      expect(
+        apiRequestMock.mock.calls.filter(([path]) =>
+          String(path).endsWith("/retry"),
+        ),
+      ).toHaveLength(1),
+    );
+    fireEvent.click(retryButton);
+    await waitFor(() =>
+      expect(
+        apiRequestMock.mock.calls.filter(([path]) =>
+          String(path).endsWith("/retry"),
+        ),
+      ).toHaveLength(2),
+    );
+    const calls = apiRequestMock.mock.calls.filter(([path]) =>
+      String(path).endsWith("/retry"),
+    );
+    expect(calls[0]?.[1]?.headers).toEqual(calls[1]?.[1]?.headers);
+    expect(idempotencyKeyMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps analyst mode read-only and exposes only the published revision", async () => {

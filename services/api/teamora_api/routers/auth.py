@@ -20,6 +20,7 @@ from teamora_api.models import (
     Project,
     ProjectUser,
     RefreshToken,
+    RetentionPolicy,
     Tenant,
     TenantSettings,
     User,
@@ -160,6 +161,16 @@ async def register(
                 tenant_id=tenant.id,
                 default_language=LanguageCode.RU,
                 max_concurrent_calls=get_settings().default_max_concurrent_calls,
+            )
+        )
+        session.add(
+            RetentionPolicy(
+                tenant_id=tenant.id,
+                project_id=None,
+                enabled=False,
+                policy_version=1,
+                grace_period_days=get_settings().retention_default_grace_days,
+                updated_by_user_id=user.id,
             )
         )
         language_rows = [

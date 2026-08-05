@@ -692,6 +692,562 @@ class CallFlowVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class BackgroundJob(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "background_jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_background_jobs_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_background_jobs_tenant_creator",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_background_jobs_tenant_id_id"),
+        CheckConstraint(
+            "status IN ('pending','scheduled','running','retry_wait','completed','failed',"
+            "'dead_letter','cancel_requested','cancelled')",
+            name="background_job_status_valid",
+        ),
+        CheckConstraint("priority >= 0 AND priority <= 100", name="background_job_priority_valid"),
+        CheckConstraint("attempt_count >= 0", name="background_job_attempt_count_non_negative"),
+        CheckConstraint("max_attempts > 0", name="background_job_max_attempts_positive"),
+        CheckConstraint("progress >= 0 AND progress <= 100", name="background_job_progress_valid"),
+        CheckConstraint("lock_version >= 1", name="background_job_lock_version_positive"),
+        Index(
+            "uq_background_jobs_tenant_type_idempotency",
+            "tenant_id",
+            "type",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index(
+            "ix_background_jobs_claim",
+            "queue",
+            "status",
+            "available_at",
+            "priority",
+            "created_at",
+        ),
+        Index("ix_background_jobs_tenant_status_type", "tenant_id", "status", "type"),
+        Index("ix_background_jobs_lease_expiry", "status", "lease_expires_at"),
+        Index("ix_background_jobs_creator", "tenant_id", "created_by_user_id", "created_at"),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(index=True)
+    type: Mapped[str] = mapped_column(String(80), nullable=False)
+    queue: Mapped[str] = mapped_column(String(40), default="default", nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    safe_payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(160), index=True)
+    lease_token: Mapped[UUID | None] = mapped_column(index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    causation_id: Mapped[UUID | None] = mapped_column(index=True)
+    result_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    safe_error_message: Mapped[str | None] = mapped_column(String(500))
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class BackgroundJobAttempt(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "background_job_attempts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_background_job_attempts_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "job_id"],
+            ["background_jobs.tenant_id", "background_jobs.id"],
+            name="fk_background_job_attempts_tenant_job",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "job_id",
+            "attempt_number",
+            name="uq_background_job_attempts_job_number",
+        ),
+        CheckConstraint("attempt_number > 0", name="background_job_attempt_number_positive"),
+        CheckConstraint(
+            "status IN ('running','completed','failed','cancelled','lease_lost')",
+            name="background_job_attempt_status_valid",
+        ),
+        Index("ix_background_job_attempts_job_started", "tenant_id", "job_id", "started_at"),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    job_id: Mapped[UUID] = mapped_column(index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    lease_token: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="running", nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    safe_error_message: Mapped[str | None] = mapped_column(String(500))
+    result_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class BackgroundJobEvent(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "background_job_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_background_job_events_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "job_id"],
+            ["background_jobs.tenant_id", "background_jobs.id"],
+            name="fk_background_job_events_tenant_job",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "actor_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_background_job_events_tenant_actor",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_background_job_events_job_occurred", "tenant_id", "job_id", "occurred_at"),
+        Index("ix_background_job_events_type_occurred", "tenant_id", "event_type", "occurred_at"),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    job_id: Mapped[UUID] = mapped_column(index=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    safe_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    actor_user_id: Mapped[UUID | None] = mapped_column(index=True)
+    correlation_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class ScheduledJob(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "scheduled_jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_scheduled_jobs_tenant_project",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("priority >= 0 AND priority <= 100", name="scheduled_job_priority_valid"),
+        CheckConstraint("interval_seconds > 0", name="scheduled_job_interval_positive"),
+        CheckConstraint("lock_version >= 1", name="scheduled_job_lock_version_positive"),
+        Index(
+            "uq_scheduled_jobs_tenant_global_key",
+            "tenant_id",
+            "schedule_key",
+            unique=True,
+            postgresql_where=text("project_id IS NULL"),
+        ),
+        Index(
+            "uq_scheduled_jobs_tenant_project_key",
+            "tenant_id",
+            "project_id",
+            "schedule_key",
+            unique=True,
+            postgresql_where=text("project_id IS NOT NULL"),
+        ),
+        Index("ix_scheduled_jobs_due", "enabled", "next_run_at"),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    job_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    queue: Mapped[str] = mapped_column(String(40), default="system", nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    safe_payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    schedule_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    last_enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class JobCommandSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "job_command_submissions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_job_command_submissions_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "job_id"],
+            ["background_jobs.tenant_id", "background_jobs.id"],
+            name="fk_job_command_submissions_tenant_job",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "submitted_by_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_job_command_submissions_tenant_submitter",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id", "idempotency_key", name="uq_job_command_submissions_tenant_idempotency"
+        ),
+        CheckConstraint(
+            "status IN ('accepted','completed','rejected')",
+            name="job_command_submission_status_valid",
+        ),
+        Index("ix_job_command_submissions_job_created", "tenant_id", "job_id", "created_at"),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    job_id: Mapped[UUID] = mapped_column(index=True)
+    submitted_by_user_id: Mapped[UUID | None] = mapped_column(index=True)
+    command: Mapped[str] = mapped_column(String(40), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="accepted", nullable=False)
+    response_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class StorageObject(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "storage_objects"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_storage_objects_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_storage_objects_tenant_id_id"),
+        UniqueConstraint("bucket", "object_key", name="uq_storage_objects_bucket_object_key"),
+        CheckConstraint(
+            "category IN ('knowledge_original','import_source','import_report','temporary_preview',"
+            "'call_recording','generated_report','other')",
+            name="storage_object_category_valid",
+        ),
+        CheckConstraint(
+            "status IN ('uploading','active','archived','missing','orphan_candidate',"
+            "'pending_purge','purged')",
+            name="storage_object_status_valid",
+        ),
+        CheckConstraint(
+            "retention_state IN ('retained','eligible','pending_purge','purged')",
+            name="storage_object_retention_state_valid",
+        ),
+        CheckConstraint("size_bytes >= 0", name="storage_object_size_non_negative"),
+        CheckConstraint("lock_version >= 1", name="storage_object_lock_version_positive"),
+        Index(
+            "ix_storage_objects_owner",
+            "tenant_id",
+            "owner_aggregate_type",
+            "owner_aggregate_id",
+        ),
+        Index("ix_storage_objects_consistency", "status", "last_verified_at", "missing_at"),
+        Index(
+            "ix_storage_objects_retention",
+            "tenant_id",
+            "retention_state",
+            "pending_purge_at",
+        ),
+        Index("ix_storage_objects_expiry", "expires_at", "status"),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    bucket: Mapped[str] = mapped_column(String(63), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    owner_aggregate_type: Mapped[str | None] = mapped_column(String(80))
+    owner_aggregate_id: Mapped[UUID | None] = mapped_column(index=True)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(160), default="application/octet-stream", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="uploading", nullable=False)
+    retention_state: Mapped[str] = mapped_column(String(24), default="retained", nullable=False)
+    legal_hold: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    missing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    pending_purge_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class StorageConsistencyIssue(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "storage_consistency_issues"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_storage_consistency_issues_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "storage_object_id"],
+            ["storage_objects.tenant_id", "storage_objects.id"],
+            name="fk_storage_consistency_issues_tenant_object",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "issue_type IN ('missing_object','orphan_object','checksum_mismatch','size_mismatch',"
+            "'incomplete_multipart','expired_temporary')",
+            name="storage_consistency_issue_type_valid",
+        ),
+        CheckConstraint(
+            "status IN ('open','confirmed','resolved','ignored')",
+            name="storage_consistency_issue_status_valid",
+        ),
+        CheckConstraint("lock_version >= 1", name="storage_consistency_issue_lock_version_positive"),
+        Index(
+            "uq_storage_consistency_issues_active",
+            "tenant_id",
+            "issue_type",
+            "bucket",
+            "object_key",
+            unique=True,
+            postgresql_where=text("status IN ('open','confirmed')"),
+        ),
+        Index("ix_storage_consistency_issues_status_grace", "status", "grace_until"),
+        Index("ix_storage_consistency_issues_object", "tenant_id", "storage_object_id"),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    storage_object_id: Mapped[UUID | None] = mapped_column(index=True)
+    issue_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="open", nullable=False)
+    bucket: Mapped[str] = mapped_column(String(63), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    safe_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    first_detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    last_detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    grace_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class RetentionPolicy(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "retention_policies"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_retention_policies_tenant_project",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "updated_by_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_retention_policies_tenant_updater",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_retention_policies_tenant_id_id"),
+        CheckConstraint("policy_version >= 1", name="retention_policy_version_positive"),
+        CheckConstraint("grace_period_days > 0", name="retention_policy_grace_positive"),
+        CheckConstraint(
+            "recording_days IS NULL OR recording_days > 0",
+            name="retention_policy_recording_days_positive",
+        ),
+        CheckConstraint(
+            "transcript_days IS NULL OR transcript_days > 0",
+            name="retention_policy_transcript_days_positive",
+        ),
+        CheckConstraint(
+            "temporary_import_days IS NULL OR temporary_import_days > 0",
+            name="retention_policy_temporary_import_days_positive",
+        ),
+        CheckConstraint(
+            "import_report_days IS NULL OR import_report_days > 0",
+            name="retention_policy_import_report_days_positive",
+        ),
+        CheckConstraint(
+            "archived_knowledge_days IS NULL OR archived_knowledge_days > 0",
+            name="retention_policy_archived_knowledge_days_positive",
+        ),
+        CheckConstraint(
+            "realtime_event_days IS NULL OR realtime_event_days > 0",
+            name="retention_policy_realtime_event_days_positive",
+        ),
+        CheckConstraint(
+            "completed_job_days IS NULL OR completed_job_days > 0",
+            name="retention_policy_completed_job_days_positive",
+        ),
+        CheckConstraint(
+            "failed_job_days IS NULL OR failed_job_days > 0",
+            name="retention_policy_failed_job_days_positive",
+        ),
+        Index(
+            "uq_retention_policies_tenant_default",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("project_id IS NULL"),
+        ),
+        Index(
+            "uq_retention_policies_tenant_project",
+            "tenant_id",
+            "project_id",
+            unique=True,
+            postgresql_where=text("project_id IS NOT NULL"),
+        ),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    grace_period_days: Mapped[int] = mapped_column(Integer, default=7, nullable=False)
+    recording_days: Mapped[int | None] = mapped_column(Integer)
+    transcript_days: Mapped[int | None] = mapped_column(Integer)
+    temporary_import_days: Mapped[int | None] = mapped_column(Integer)
+    import_report_days: Mapped[int | None] = mapped_column(Integer)
+    archived_knowledge_days: Mapped[int | None] = mapped_column(Integer)
+    realtime_event_days: Mapped[int | None] = mapped_column(Integer)
+    completed_job_days: Mapped[int | None] = mapped_column(Integer)
+    failed_job_days: Mapped[int | None] = mapped_column(Integer)
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(index=True)
+
+
+class RetentionCandidate(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "retention_candidates"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_retention_candidates_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "policy_id"],
+            ["retention_policies.tenant_id", "retention_policies.id"],
+            name="fk_retention_candidates_tenant_policy",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "storage_object_id"],
+            ["storage_objects.tenant_id", "storage_objects.id"],
+            name="fk_retention_candidates_tenant_object",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_retention_candidates_tenant_idempotency"),
+        CheckConstraint(
+            "status IN ('eligible','pending_purge','blocked','purged','cancelled')",
+            name="retention_candidate_status_valid",
+        ),
+        CheckConstraint("policy_version >= 1", name="retention_candidate_policy_version_positive"),
+        CheckConstraint("lock_version >= 1", name="retention_candidate_lock_version_positive"),
+        Index("ix_retention_candidates_due", "status", "grace_until"),
+        Index(
+            "ix_retention_candidates_resource",
+            "tenant_id",
+            "resource_type",
+            "resource_id",
+        ),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    policy_id: Mapped[UUID] = mapped_column(index=True)
+    storage_object_id: Mapped[UUID | None] = mapped_column(index=True)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    resource_id: Mapped[UUID] = mapped_column(index=True)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="eligible", nullable=False)
+    eligible_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    pending_purge_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    grace_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancellation_reason: Mapped[str | None] = mapped_column(String(500))
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    safe_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class LegalHold(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "legal_holds"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_legal_holds_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_legal_holds_tenant_creator",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "released_by_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_legal_holds_tenant_releaser",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "scope_type IN ('tenant','project','call','customer','document')",
+            name="legal_hold_scope_type_valid",
+        ),
+        CheckConstraint(
+            "(scope_type = 'tenant' AND scope_id IS NULL) OR "
+            "(scope_type <> 'tenant' AND scope_id IS NOT NULL)",
+            name="legal_hold_scope_id_valid",
+        ),
+        CheckConstraint("lock_version >= 1", name="legal_hold_lock_version_positive"),
+        Index(
+            "uq_legal_holds_active_tenant_scope",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("released_at IS NULL AND scope_type = 'tenant'"),
+        ),
+        Index(
+            "uq_legal_holds_active_resource_scope",
+            "tenant_id",
+            "scope_type",
+            "scope_id",
+            unique=True,
+            postgresql_where=text("released_at IS NULL AND scope_type <> 'tenant'"),
+        ),
+        Index("ix_legal_holds_project_active", "tenant_id", "project_id", "released_at"),
+    )
+
+    project_id: Mapped[UUID | None] = mapped_column(index=True)
+    scope_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    scope_id: Mapped[UUID | None] = mapped_column(index=True)
+    reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(index=True)
+    released_by_user_id: Mapped[UUID | None] = mapped_column(index=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
 class KnowledgeSource(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "knowledge_sources"
     __table_args__ = (
@@ -827,6 +1383,12 @@ class KnowledgeDocumentVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="fk_knowledge_document_versions_tenant_document",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "storage_object_id"],
+            ["storage_objects.tenant_id", "storage_objects.id"],
+            name="fk_knowledge_document_versions_tenant_storage_object",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("document_id", "version", name="uq_knowledge_document_versions_document_version"),
         UniqueConstraint("tenant_id", "project_id", "id", name="uq_kdv_tenant_project_id"),
         CheckConstraint(
@@ -859,6 +1421,7 @@ class KnowledgeDocumentVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     file_type: Mapped[str] = mapped_column(String(12), nullable=False)
     content_type: Mapped[str] = mapped_column(String(160), nullable=False)
     object_key: Mapped[str | None] = mapped_column(String(640))
+    storage_object_id: Mapped[UUID | None] = mapped_column(index=True)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     content_length: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     extracted_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -947,6 +1510,12 @@ class DocumentIngestionJob(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="fk_document_ingestion_jobs_tenant_version",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "background_job_id"],
+            ["background_jobs.tenant_id", "background_jobs.id"],
+            name="fk_document_ingestion_jobs_tenant_background_job",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("tenant_id", "document_version_id", name="uq_ingestion_job_document_version"),
         UniqueConstraint("tenant_id", "idempotency_key", name="uq_ingestion_job_idempotency"),
         CheckConstraint(
@@ -959,6 +1528,7 @@ class DocumentIngestionJob(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
     project_id: Mapped[UUID] = mapped_column(index=True)
     document_version_id: Mapped[UUID] = mapped_column(index=True)
+    background_job_id: Mapped[UUID | None] = mapped_column(index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     stage: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -1193,13 +1763,43 @@ class CustomerImport(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="fk_customer_imports_tenant_creator_memberships",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "background_job_id"],
+            ["background_jobs.tenant_id", "background_jobs.id"],
+            name="fk_customer_imports_tenant_background_job",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_storage_object_id"],
+            ["storage_objects.tenant_id", "storage_objects.id"],
+            name="fk_customer_imports_tenant_source_storage_object",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "report_storage_object_id"],
+            ["storage_objects.tenant_id", "storage_objects.id"],
+            name="fk_customer_imports_tenant_report_storage_object",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
-            "status IN ('preview', 'committed', 'expired')",
+            "status IN ('preview', 'committed', 'expired', 'processing_preview', 'ready', "
+            "'queued', 'running', 'finalizing', 'completed', 'failed', "
+            "'cancel_requested', 'cancelled')",
             name="status_valid",
         ),
         CheckConstraint(
             "update_rule IN ('skip', 'update')",
             name="update_rule_valid",
+        ),
+        CheckConstraint(
+            "progress IS NULL OR (progress >= 0 AND progress <= 100)",
+            name="progress_valid",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "id",
+            name="uq_customer_imports_tenant_project_id",
         ),
         Index(
             "uq_customer_imports_tenant_idempotency_key",
@@ -1220,12 +1820,82 @@ class CustomerImport(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     source_rows: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
     mapping: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
     update_rule: Mapped[str] = mapped_column(String(16), default="skip", nullable=False)
-    status: Mapped[str] = mapped_column(String(16), default="preview", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="preview", nullable=False)
     row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     report: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(String(160))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    execution_mode: Mapped[str | None] = mapped_column(String(16))
+    background_job_id: Mapped[UUID | None] = mapped_column(index=True)
+    source_storage_object_id: Mapped[UUID | None] = mapped_column(index=True)
+    report_storage_object_id: Mapped[UUID | None] = mapped_column(index=True)
+    progress: Mapped[int | None] = mapped_column(Integer)
+    total_rows: Mapped[int | None] = mapped_column(Integer)
+    valid_rows: Mapped[int | None] = mapped_column(Integer)
+    invalid_rows: Mapped[int | None] = mapped_column(Integer)
+    duplicate_rows: Mapped[int | None] = mapped_column(Integer)
+    created_count: Mapped[int | None] = mapped_column(Integer)
+    updated_count: Mapped[int | None] = mapped_column(Integer)
+    skipped_count: Mapped[int | None] = mapped_column(Integer)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mapping_snapshot: Mapped[dict[str, str] | None] = mapped_column(JSON)
+    update_policy_snapshot: Mapped[str | None] = mapped_column(String(16))
+
+
+class CustomerImportStagingRow(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "customer_import_staging_rows"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_customer_import_staging_rows_tenant_project",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "import_id"],
+            ["customer_imports.tenant_id", "customer_imports.project_id", "customer_imports.id"],
+            name="fk_customer_import_staging_rows_tenant_import",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "target_customer_id"],
+            ["customers.tenant_id", "customers.project_id", "customers.id"],
+            name="fk_customer_import_staging_rows_tenant_customer",
+            ondelete="SET NULL (target_customer_id)",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "import_id",
+            "row_number",
+            name="uq_customer_import_staging_rows_import_row",
+        ),
+        CheckConstraint("row_number > 0", name="customer_import_staging_row_number_positive"),
+        CheckConstraint(
+            "status IN ('staged','valid','invalid','duplicate','merged','skipped')",
+            name="customer_import_staging_status_valid",
+        ),
+        Index(
+            "ix_customer_import_staging_rows_import_status",
+            "tenant_id",
+            "import_id",
+            "status",
+            "row_number",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    import_id: Mapped[UUID] = mapped_column(index=True)
+    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="staged", nullable=False)
+    normalized_payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    identity_hashes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    safe_errors: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list, nullable=False)
+    target_customer_id: Mapped[UUID | None] = mapped_column(index=True)
+    result_action: Mapped[str | None] = mapped_column(String(24))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CustomerNote(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -1525,8 +2195,17 @@ class TranscriptSegment(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
     started_ms: Mapped[int | None] = mapped_column(Integer)
     ended_ms: Mapped[int | None] = mapped_column(Integer)
+    retention_redacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
-    __table_args__ = (UniqueConstraint("call_id", "sequence"),)
+    __table_args__ = (
+        UniqueConstraint("call_id", "sequence"),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_transcript_segments_tenant_call",
+            ondelete="CASCADE",
+        ),
+    )
 
 
 class CallSummary(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
@@ -1542,8 +2221,34 @@ class CallSummary(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class CallRecording(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "call_recordings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_call_recordings_tenant_call",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "storage_object_id"],
+            ["storage_objects.tenant_id", "storage_objects.id"],
+            name="fk_call_recordings_tenant_storage_object",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "retention_state IN ('retained', 'eligible', 'pending_purge', 'purged')",
+            name="retention_state_valid",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_call_recordings_tenant_id_id"),
+        Index(
+            "ix_call_recordings_tenant_retention",
+            "tenant_id",
+            "retention_state",
+            "delete_after",
+        ),
+    )
 
     call_id: Mapped[UUID] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), index=True)
+    storage_object_id: Mapped[UUID | None] = mapped_column(index=True)
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
     encryption_key_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -1551,6 +2256,10 @@ class CallRecording(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     recording_paused_ranges: Mapped[list[dict[str, int]]] = mapped_column(JSON, default=list)
     delete_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retention_state: Mapped[str] = mapped_column(String(24), default="retained", nullable=False)
+    retention_eligible_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    pending_purge_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class CallTag(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

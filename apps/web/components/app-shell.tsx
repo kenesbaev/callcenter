@@ -41,6 +41,7 @@ const dialerRoles: Role[] = [
   "human_operator",
 ];
 const managementRoles: Role[] = ["tenant_owner", "tenant_manager"];
+const settingsRoles: Role[] = ["tenant_owner", "tenant_manager", "analyst"];
 const analyticsRoles: Role[] = [
   "tenant_owner",
   "tenant_manager",
@@ -119,7 +120,7 @@ const secondaryNav: Array<{
     href: "/app/settings",
     label: "Настройки",
     icon: Settings,
-    roles: managementRoles,
+    roles: settingsRoles,
   },
   {
     href: "/app/dev-simulator",

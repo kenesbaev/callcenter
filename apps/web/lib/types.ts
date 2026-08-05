@@ -78,6 +78,7 @@ export type KnowledgeDocumentVersion = {
   safe_error_message: string | null;
   lock_version: number;
   created_at: string;
+  background_job?: BackgroundJobSummary | null;
 };
 
 export type KnowledgeRevision = {
@@ -426,6 +427,219 @@ export type CustomerImportReport = {
   duplicates: number;
   errors: Array<{ row_number: number; messages: string[] }>;
   committed_at: string;
+};
+
+export type BackgroundJobStatus =
+  | "pending"
+  | "scheduled"
+  | "running"
+  | "retry_wait"
+  | "completed"
+  | "failed"
+  | "dead_letter"
+  | "cancel_requested"
+  | "cancelled";
+
+export type BackgroundJobSummary = {
+  id: string;
+  project_id: string | null;
+  type: string;
+  queue: string;
+  priority: number;
+  status: BackgroundJobStatus;
+  progress: number;
+  attempt_count: number;
+  max_attempts: number;
+  scheduled_at: string | null;
+  available_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  safe_error_code: string | null;
+  state_version: number;
+  created_at: string;
+  updated_at: string;
+  can_cancel: boolean;
+  can_retry: boolean;
+};
+
+export type BackgroundJobDetail = BackgroundJobSummary & {
+  correlation_id: string | null;
+  causation_id: string | null;
+  payload_summary: Record<string, unknown>;
+  result_metadata: Record<string, unknown>;
+  safe_error_message: string | null;
+};
+
+export type BackgroundJobAttempt = {
+  id: string;
+  job_id: string;
+  attempt: number;
+  status: string;
+  worker_id: string | null;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  safe_error_code: string | null;
+  safe_error_message: string | null;
+};
+
+export type BackgroundJobEvent = {
+  id: string;
+  job_id: string;
+  event_type: string;
+  progress: number | null;
+  safe_snapshot: Record<string, unknown>;
+  occurred_at: string;
+};
+
+export type BackgroundJobStats = {
+  queued: number;
+  running: number;
+  retry_wait: number;
+  completed: number;
+  failed: number;
+  dead_letter: number;
+  cancel_requested: number;
+  oldest_pending_at: string | null;
+  can_manage: boolean;
+};
+
+export type BackgroundImportStatus =
+  | "uploading"
+  | "previewing"
+  | "preview_ready"
+  | "queued"
+  | "staging"
+  | "ready_to_finalize"
+  | "finalizing"
+  | "completed"
+  | "failed"
+  | "expired"
+  | "cancel_requested"
+  | "cancelled";
+
+export type BackgroundCustomerImport = {
+  id: string;
+  job_id: string | null;
+  project_id: string;
+  file_name: string;
+  file_type: "csv" | "xlsx";
+  status: BackgroundImportStatus;
+  progress: number;
+  sheet_names: string[];
+  selected_sheet: string;
+  headers: string[];
+  mapping: Record<string, string>;
+  update_rule: "skip" | "update";
+  preview_rows: CustomerImportRow[];
+  total_rows: number;
+  valid_rows: number;
+  invalid_rows: number;
+  duplicate_rows: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  error_count: number;
+  safe_error_code: string | null;
+  processing_duration_ms: number | null;
+  state_version: number;
+  can_commit: boolean;
+  can_cancel: boolean;
+  can_retry: boolean;
+  report_available: boolean;
+  created_at: string;
+  completed_at: string | null;
+};
+
+export type StorageCategorySummary = {
+  category: string;
+  object_count: number;
+  bytes: number;
+};
+
+export type StorageSummary = {
+  object_count: number;
+  total_bytes: number;
+  issue_count: number;
+  pending_purge_count: number;
+  categories: StorageCategorySummary[];
+  last_scan_at: string | null;
+  can_scan: boolean;
+};
+
+export type StorageIssue = {
+  id: string;
+  project_id: string | null;
+  object_id: string | null;
+  issue_type:
+    | "missing_object"
+    | "orphan_object"
+    | "checksum_mismatch"
+    | "size_mismatch"
+    | "expired_temporary"
+    | "multipart_upload";
+  status: "candidate" | "quarantined" | "confirmed" | "resolved";
+  object_category: string;
+  detected_at: string;
+  last_verified_at: string | null;
+  grace_expires_at: string | null;
+};
+
+export type RetentionPolicy = {
+  id: string;
+  automatic_purge_enabled: boolean;
+  grace_period_days: number;
+  call_recording_days: number | null;
+  transcript_days: number | null;
+  temporary_import_days: number | null;
+  import_report_days: number | null;
+  archived_knowledge_days: number | null;
+  realtime_event_hours: number | null;
+  completed_job_days: number | null;
+  failed_job_days: number | null;
+  state_version: number;
+  updated_at: string;
+  can_manage: boolean;
+};
+
+export type RetentionPreview = {
+  id: string;
+  policy_version: number;
+  eligible_objects: number;
+  eligible_bytes: number;
+  excluded_by_legal_hold: number;
+  excluded_by_active_reference: number;
+  created_at: string;
+};
+
+export type RetentionCandidate = {
+  id: string;
+  project_id: string | null;
+  object_category: string;
+  owner_aggregate_type: string;
+  owner_aggregate_id: string | null;
+  status: "eligible" | "pending_purge" | "blocked" | "purged" | "cancelled";
+  eligible_at: string;
+  purge_after: string | null;
+  bytes: number;
+  legal_hold: boolean;
+  can_cancel: boolean;
+  state_version: number;
+};
+
+export type LegalHold = {
+  id: string;
+  project_id: string | null;
+  scope_type: "tenant" | "project" | "call" | "customer" | "document";
+  scope_id: string | null;
+  reason: string;
+  created_by_user_id: string;
+  created_at: string;
+  released_by_user_id: string | null;
+  released_at: string | null;
+  can_release: boolean;
+  state_version: number;
 };
 
 export type CallbackTask = {

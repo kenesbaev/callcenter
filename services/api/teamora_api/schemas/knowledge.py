@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from teamora_api.schemas.background import BackgroundJobRead
 from teamora_api.schemas.call_flows import normalize_language_code
 
 
@@ -96,6 +97,7 @@ class KnowledgeDocumentVersionRead(BaseModel):
     safe_error_code: str | None
     safe_error_message: str | None
     lock_version: int
+    background_job: BackgroundJobRead | None = None
     created_at: datetime
 
 

@@ -19,12 +19,14 @@ import {
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Button, StatusBadge } from "@teamora/ui";
 import { QueryError, SectionSkeleton } from "@/components/query-state";
+import { useRealtime } from "@/components/realtime-provider";
 import {
   ApiClientError,
   apiRequest,
   apiUpload,
   idempotencyKey,
 } from "@/lib/api";
+import { createLogicalMutationKeyStore } from "@/lib/logical-mutation-key";
 import type {
   AuthResponse,
   KnowledgeBase,
@@ -82,6 +84,8 @@ function formatBytes(value: number): string {
 
 export function KnowledgeView() {
   const queryClient = useQueryClient();
+  const realtime = useRealtime();
+  const [mutationKeys] = useState(createLogicalMutationKeyStore);
   const fileRef = useRef<HTMLInputElement>(null);
   const [projectId, setProjectId] = useState("");
   const [baseId, setBaseId] = useState("");
@@ -170,6 +174,7 @@ export function KnowledgeView() {
       ),
     enabled: Boolean(baseId && selectedRevision),
     refetchInterval: (state) =>
+      !realtime.connected &&
       state.state.data?.items.some((item) =>
         processingStatuses.has(item.version?.status ?? ""),
       )
@@ -187,7 +192,10 @@ export function KnowledgeView() {
   );
 
   async function refreshKnowledge(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: ["knowledge"] });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["knowledge"] }),
+      queryClient.invalidateQueries({ queryKey: ["background-jobs"] }),
+    ]);
   }
 
   const createBase = useMutation({
@@ -264,19 +272,27 @@ export function KnowledgeView() {
     onError: (caught) => setError(message(caught)),
   });
   const addText = useMutation({
-    mutationFn: () =>
-      apiRequest<KnowledgeDocument>("/knowledge/text", {
+    mutationFn: () => {
+      const payload = {
+        project_id: projectId,
+        knowledge_base_id: baseId,
+        title: textTitle,
+        language,
+        content: textContent,
+      };
+      return apiRequest<KnowledgeDocument>("/knowledge/text", {
         method: "POST",
-        headers: { "Idempotency-Key": idempotencyKey("knowledge-text") },
-        body: JSON.stringify({
-          project_id: projectId,
-          knowledge_base_id: baseId,
-          title: textTitle,
-          language,
-          content: textContent,
-        }),
-      }),
+        headers: {
+          "Idempotency-Key": mutationKeys.get(
+            "knowledge-text",
+            JSON.stringify(payload),
+          ),
+        },
+        body: JSON.stringify(payload),
+      });
+    },
     onSuccess: async () => {
+      mutationKeys.reset("knowledge-text");
       setTextTitle("");
       setTextContent("");
       setSuccess("Текст добавлен и проиндексирован");
@@ -302,14 +318,28 @@ export function KnowledgeView() {
       }
       form.set("file", uploadFile);
       setUploadPercent(0);
+      const fingerprint = JSON.stringify({
+        revisionId: selectedBase.draft_revision.id,
+        title: uploadTitle || uploadFile.name.replace(/\.[^.]+$/, ""),
+        language,
+        replacementId: replacement?.id ?? null,
+        replacementVersion: replacement?.version?.lock_version ?? null,
+        fileName: uploadFile.name,
+        fileSize: uploadFile.size,
+        fileType: uploadFile.type,
+        fileLastModified: uploadFile.lastModified,
+      });
       return apiUpload<KnowledgeDocument>(
         "/knowledge/documents/upload",
         form,
-        { "Idempotency-Key": idempotencyKey("knowledge-upload") },
+        {
+          "Idempotency-Key": mutationKeys.get("knowledge-upload", fingerprint),
+        },
         setUploadPercent,
       );
     },
     onSuccess: async () => {
+      mutationKeys.reset("knowledge-upload");
       setUploadFile(null);
       setUploadTitle("");
       setReplacement(null);
@@ -347,11 +377,17 @@ export function KnowledgeView() {
         `/knowledge/documents/${version.id}/retry`,
         {
           method: "POST",
-          headers: { "Idempotency-Key": idempotencyKey("knowledge-retry") },
+          headers: {
+            "Idempotency-Key": mutationKeys.get(
+              `knowledge-retry:${version.id}`,
+              String(version.lock_version),
+            ),
+          },
           body: JSON.stringify({ expected_version: version.lock_version }),
         },
       ),
-    onSuccess: async () => {
+    onSuccess: async (_response, version) => {
+      mutationKeys.reset(`knowledge-retry:${version.id}`);
       setSuccess("Документ возвращён в очередь");
       setError("");
       await refreshKnowledge();
@@ -815,6 +851,34 @@ export function KnowledgeView() {
                             <small className="field-error">
                               {document.version.safe_error_message}
                             </small>
+                          )}
+                          {document.version?.background_job && (
+                            <div className="knowledge-job-progress">
+                              <div className="background-job-progress">
+                                <div>
+                                  <span
+                                    style={{
+                                      width: `${document.version.background_job.progress}%`,
+                                    }}
+                                  />
+                                </div>
+                                <small>
+                                  Общая очередь:{" "}
+                                  {document.version.background_job.progress}% ·
+                                  попытка{" "}
+                                  {
+                                    document.version.background_job
+                                      .attempt_count
+                                  }
+                                  /
+                                  {document.version.background_job.max_attempts}{" "}
+                                  ·{" "}
+                                  {realtime.connected
+                                    ? "realtime"
+                                    : "резервное обновление"}
+                                </small>
+                              </div>
+                            </div>
                           )}
                         </div>
                         <div className="knowledge-row-actions">

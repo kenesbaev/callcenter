@@ -96,12 +96,30 @@ export function apiUpload<T>(
   body: FormData,
   extraHeaders: Record<string, string>,
   onProgress: (percentage: number) => void,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open("POST", `/api/v1${path}`);
     request.withCredentials = true;
-    request.timeout = Math.max(API_REQUEST_TIMEOUT_MS, 60_000);
+    request.timeout = Math.max(
+      API_REQUEST_TIMEOUT_MS,
+      options.timeoutMs ?? 60_000,
+    );
+    const abortFromCaller = () => request.abort();
+    if (options.signal?.aborted) {
+      reject(
+        new ApiClientError(
+          0,
+          "upload_cancelled",
+          "Загрузка отменена пользователем.",
+        ),
+      );
+      return;
+    }
+    options.signal?.addEventListener("abort", abortFromCaller, {
+      once: true,
+    });
     const csrf = cookie("tv_csrf");
     if (csrf) request.setRequestHeader("X-CSRF-Token", csrf);
     for (const [name, value] of Object.entries(extraHeaders)) {
@@ -156,6 +174,18 @@ export function apiUpload<T>(
           "Загрузка не завершилась вовремя.",
         ),
       ),
+    );
+    request.addEventListener("abort", () =>
+      reject(
+        new ApiClientError(
+          0,
+          "upload_cancelled",
+          "Загрузка отменена пользователем.",
+        ),
+      ),
+    );
+    request.addEventListener("loadend", () =>
+      options.signal?.removeEventListener("abort", abortFromCaller),
     );
     request.send(body);
   });

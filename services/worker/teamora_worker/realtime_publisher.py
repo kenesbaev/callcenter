@@ -128,8 +128,15 @@ class RealtimePublisher:
         return published
 
     async def cleanup_expired(self, connection: asyncpg.Connection) -> int:
+        """Report expired events without deleting outside tenant retention.
+
+        The Stage 14 retention worker creates reviewed, two-phase candidates.
+        Keeping this hook non-destructive preserves the existing health loop
+        while ensuring an enabled retention policy is always required.
+        """
+
         tenant_ids = await connection.fetch("SELECT id FROM tenants ORDER BY id")
-        deleted = 0
+        eligible = 0
         for tenant_row in tenant_ids:
             tenant_id = tenant_row["id"]
             async with connection.transaction():
@@ -137,22 +144,17 @@ class RealtimePublisher:
                     "SELECT set_config('app.tenant_id', $1, true)",
                     str(tenant_id),
                 )
-                result = await connection.execute(
+                count = await connection.fetchval(
                     """
-                    DELETE FROM realtime_events
-                    WHERE id IN (
-                        SELECT id FROM realtime_events
-                        WHERE tenant_id = $1
-                          AND expires_at <= now()
-                          AND publish_status = 'published'
-                        ORDER BY cursor
-                        LIMIT 1000
-                    )
+                    SELECT count(*) FROM realtime_events
+                    WHERE tenant_id = $1
+                      AND expires_at <= now()
+                      AND publish_status = 'published'
                     """,
                     tenant_id,
                 )
-                deleted += int(result.rsplit(" ", 1)[-1])
-        return deleted
+                eligible += int(count or 0)
+        return eligible
 
     async def _heartbeat(self, connection: asyncpg.Connection) -> None:
         oldest_unpublished: datetime | None = None

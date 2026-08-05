@@ -58,7 +58,26 @@ const queryGroups: Array<{ prefix: string; keys: string[][] }> = [
   { prefix: "operator.", keys: [["team"], ["calls"], ["live-calls"]] },
   { prefix: "team.", keys: [["team"], ["auth"]] },
   { prefix: "knowledge.", keys: [["knowledge"]] },
+  {
+    prefix: "job.",
+    keys: [["background-jobs"], ["customer-imports"], ["knowledge"]],
+  },
+  {
+    prefix: "import.",
+    keys: [["customer-imports"], ["background-jobs"], ["customers"]],
+  },
+  {
+    prefix: "retention.",
+    keys: [["retention"], ["storage"], ["background-jobs"]],
+  },
+  { prefix: "storage.", keys: [["storage"], ["background-jobs"]] },
 ];
+
+export function realtimeQueryKeys(eventType: string): string[][] {
+  return (
+    queryGroups.find(({ prefix }) => eventType.startsWith(prefix))?.keys ?? []
+  );
+}
 
 const terminalCallStates = new Set<CallStatus>([
   "completed",
@@ -117,6 +136,11 @@ export function RealtimeProvider({
       ["analytics"],
       ["conversations"],
       ["knowledge"],
+      ["background-jobs"],
+      ["customer-imports"],
+      ["storage"],
+      ["retention"],
+      ["legal-holds"],
     ]) {
       void queryClient.invalidateQueries({ queryKey: key });
     }
@@ -137,10 +161,7 @@ export function RealtimeProvider({
           patchLiveCall(calls, event),
         );
       }
-      const group = queryGroups.find(({ prefix }) =>
-        event.event_type.startsWith(prefix),
-      );
-      for (const key of group?.keys ?? []) {
+      for (const key of realtimeQueryKeys(event.event_type)) {
         if (
           event.event_type === "call.state_changed" &&
           key.length === 1 &&

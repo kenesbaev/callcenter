@@ -17,6 +17,7 @@ if config.config_file_name is not None:
 
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.migration_database_url or settings.database_url)
+config.set_main_option("teamora.minio_bucket", settings.minio_bucket)
 target_metadata = Base.metadata
 
 
