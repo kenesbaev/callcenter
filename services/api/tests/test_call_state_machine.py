@@ -23,11 +23,12 @@ from teamora_api.enums import (
     CallerType,
     CallStatus,
     HangupCause,
+    IntegrationStatus,
     TelephonyCallState,
     TelephonyCommandName,
 )
 from teamora_api.errors import ApiError
-from teamora_api.models import Call, CallEvent, Project
+from teamora_api.models import Call, CallEvent, Project, SipTrunk, TelephonyDiagnosticRun
 from teamora_api.schemas.telephony import TelephonyCommand
 from teamora_api.telephony.providers import (
     MockTelephonyProvider,
@@ -142,7 +143,27 @@ async def test_timestamps_versions_and_provider_event_ordering(
             provider_state=CallStatus.QUEUED.value,
             is_demo=True,
         )
-        session.add(call)
+        trunk = SipTrunk(
+            tenant_id=tenant_id,
+            name="Live diagnostic test trunk",
+            provider_host="sip.invalid.test",
+            auth_mode="ip",
+            max_channels=1,
+            status=IntegrationStatus.CONFIGURED,
+        )
+        session.add_all([call, trunk])
+        await session.flush()
+        diagnostic = TelephonyDiagnosticRun(
+            tenant_id=tenant_id,
+            project_id=project.id,
+            sip_trunk_id=trunk.id,
+            call_id=call.id,
+            requested_by_user_id=actor_id,
+            mode="live",
+            status="pending",
+            correlation_id=f"live-state-test-{unique_suffix}",
+        )
+        session.add(diagnostic)
         await session.flush()
         service = CallStateService()
         await service.transition(
@@ -155,6 +176,8 @@ async def test_timestamps_versions_and_provider_event_ordering(
             actor_user_id=actor_id,
         )
         ringing_at = call.ringing_at
+        assert diagnostic.signaling_verified is False
+        assert diagnostic.status == "pending"
         await service.ingest_provider_event(
             session,
             call=call,
@@ -171,6 +194,9 @@ async def test_timestamps_versions_and_provider_event_ordering(
         assert call.ringing_at == ringing_at
         assert call.answered_at == now + timedelta(seconds=1)
         assert call.state_version == 2
+        assert diagnostic.signaling_verified is True
+        assert diagnostic.status == "live_signaling_verified"
+        assert diagnostic.completed_at == now + timedelta(seconds=1)
 
         duplicate = await service.ingest_provider_event(
             session,

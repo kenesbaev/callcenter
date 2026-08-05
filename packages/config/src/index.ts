@@ -45,6 +45,33 @@ export const gatewayEnvironmentSchema = z
       .min(250)
       .max(30_000)
       .default(5_000),
+    ASTERISK_ARI_APPLICATION: z.string().min(1).default("teamora-voice"),
+    ASTERISK_PJSIP_ENDPOINT: z.string().min(1).default("provider-endpoint"),
+    ASTERISK_ARI_RECONNECT_MIN_MS: z.coerce
+      .number()
+      .int()
+      .min(100)
+      .max(5_000)
+      .default(500),
+    ASTERISK_ARI_RECONNECT_MAX_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(120_000)
+      .default(30_000),
+    ASTERISK_RTP_BIND_HOST: z.string().min(1).default("0.0.0.0"),
+    ASTERISK_RTP_PORT_START: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .max(65_000)
+      .default(40_000),
+    ASTERISK_RTP_PORT_END: z.coerce
+      .number()
+      .int()
+      .min(1_025)
+      .max(65_535)
+      .default(40_099),
     GATEWAY_SERVICE_TOKEN: z.string().min(20),
     GATEWAY_TRUSTED_HOSTS: z
       .string()
@@ -66,6 +93,14 @@ export const gatewayEnvironmentSchema = z
         path: ["OPENAI_API_KEY"],
         message:
           "OPENAI_API_KEY is required when the OpenAI adapter is enabled in production",
+      });
+    }
+    if (value.ASTERISK_RTP_PORT_START > value.ASTERISK_RTP_PORT_END) {
+      context.addIssue({
+        code: "custom",
+        path: ["ASTERISK_RTP_PORT_END"],
+        message:
+          "ASTERISK_RTP_PORT_END must be greater than or equal to ASTERISK_RTP_PORT_START",
       });
     }
   });

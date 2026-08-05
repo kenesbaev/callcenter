@@ -5,6 +5,9 @@ import { registry } from "./metrics.js";
 import { createGatewayRequestHandler } from "./internal-api.js";
 import { AsteriskAriProvider } from "./providers/asterisk-ari.js";
 import { OpenAiRealtimeProvider } from "./providers/openai-realtime.js";
+import { AsteriskAriListener } from "./ari-listener.js";
+import { ProviderEventClient } from "./provider-event-client.js";
+import { RtpDiagnosticAdapter } from "./rtp-diagnostic.js";
 
 const parsed = gatewayEnvironmentSchema.safeParse(process.env);
 if (!parsed.success) {
@@ -35,8 +38,40 @@ const telephonyProvider =
         externalHost: config.ASTERISK_EXTERNAL_MEDIA_HOST,
         transport: config.ASTERISK_EXTERNAL_MEDIA_TRANSPORT,
         timeoutMs: config.ASTERISK_ARI_TIMEOUT_MS,
+        application: config.ASTERISK_ARI_APPLICATION,
+        pjsipEndpoint: config.ASTERISK_PJSIP_ENDPOINT,
       })
     : undefined;
+const mediaAdapter = telephonyProvider
+  ? new RtpDiagnosticAdapter(
+      config.ASTERISK_RTP_BIND_HOST,
+      config.ASTERISK_RTP_PORT_START,
+    )
+  : undefined;
+await mediaAdapter?.start();
+const providerEventClient = telephonyProvider
+  ? new ProviderEventClient(
+      config.API_INTERNAL_URL,
+      config.GATEWAY_SERVICE_TOKEN,
+      config.ASTERISK_ARI_TIMEOUT_MS,
+    )
+  : undefined;
+const ariListener =
+  telephonyProvider && providerEventClient
+    ? new AsteriskAriListener(
+        {
+          baseUrl: config.ASTERISK_ARI_URL!,
+          username: config.ASTERISK_ARI_USERNAME!,
+          password: config.ASTERISK_ARI_PASSWORD!,
+          application: config.ASTERISK_ARI_APPLICATION,
+          reconnectMinMs: config.ASTERISK_ARI_RECONNECT_MIN_MS,
+          reconnectMaxMs: config.ASTERISK_ARI_RECONNECT_MAX_MS,
+        },
+        telephonyProvider,
+        providerEventClient,
+      )
+    : undefined;
+ariListener?.start();
 const handleInternalRequest = createGatewayRequestHandler({
   serviceToken: config.GATEWAY_SERVICE_TOKEN,
   trustedHosts: config.GATEWAY_TRUSTED_HOSTS.split(",")
@@ -44,6 +79,7 @@ const handleInternalRequest = createGatewayRequestHandler({
     .filter(Boolean),
   maxBodyBytes: config.GATEWAY_MAX_BODY_BYTES,
   ...(telephonyProvider ? { provider: telephonyProvider } : {}),
+  ...(mediaAdapter ? { mediaAdapter } : {}),
 });
 let shuttingDown = false;
 
@@ -71,6 +107,10 @@ const server = createServer(async (request, response) => {
           : "unavailable",
         asterisk: telephonyProvider
           ? "configured_live_verification_required"
+          : "unavailable",
+        ari_listener: ariListener?.status() ?? "unavailable",
+        rtp_adapter: mediaAdapter
+          ? "ready_local_verification_available"
           : "unavailable",
       }),
     );
@@ -109,6 +149,8 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   logger.info({ signal }, "graceful shutdown started");
   server.close();
+  await ariListener?.stop();
+  await mediaAdapter?.stop();
   await realtimeProvider?.shutdown();
   logger.info("graceful shutdown complete");
   process.exit(0);

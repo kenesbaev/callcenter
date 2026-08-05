@@ -463,13 +463,49 @@ class TeamCommandSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class SipTrunk(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "sip_trunks"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_sip_trunks_tenant_id_id"),
+        CheckConstraint(
+            "auth_mode IN ('registration', 'ip')",
+            name="sip_trunk_auth_mode_valid",
+        ),
+        CheckConstraint(
+            "dtmf_mode IN ('auto', 'rfc4733', 'inband', 'info')",
+            name="sip_trunk_dtmf_mode_valid",
+        ),
+        CheckConstraint(
+            "channel_pool_mode IN ('shared', 'separate')",
+            name="sip_trunk_channel_pool_mode_valid",
+        ),
+        CheckConstraint("max_channels > 0", name="sip_trunk_max_channels_positive"),
+        CheckConstraint(
+            "inbound_channel_limit IS NULL OR inbound_channel_limit > 0",
+            name="sip_trunk_inbound_limit_positive",
+        ),
+        CheckConstraint(
+            "outbound_channel_limit IS NULL OR outbound_channel_limit > 0",
+            name="sip_trunk_outbound_limit_positive",
+        ),
+        CheckConstraint("lock_version >= 1", name="sip_trunk_lock_version_positive"),
+    )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     provider_host: Mapped[str] = mapped_column(String(255), nullable=False)
     provider_port: Mapped[int] = mapped_column(Integer, default=5061)
     transport: Mapped[str] = mapped_column(String(16), default="tls")
     allowed_ips: Mapped[list[str]] = mapped_column(JSON, default=list)
+    auth_mode: Mapped[str] = mapped_column(String(16), default="registration", nullable=False)
+    codecs: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    dtmf_mode: Mapped[str] = mapped_column(String(16), default="auto", nullable=False)
     max_channels: Mapped[int] = mapped_column(Integer, default=5)
+    channel_pool_mode: Mapped[str] = mapped_column(String(16), default="shared", nullable=False)
+    inbound_channel_limit: Mapped[int | None] = mapped_column(Integer)
+    outbound_channel_limit: Mapped[int | None] = mapped_column(Integer)
+    registration_status: Mapped[str] = mapped_column(String(32), default="not_configured", nullable=False)
+    reachability_status: Mapped[str] = mapped_column(String(32), default="not_configured", nullable=False)
+    last_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_safe_error: Mapped[str | None] = mapped_column(String(240))
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[IntegrationStatus] = mapped_column(
         enum_type(IntegrationStatus), default=IntegrationStatus.CONFIGURED
     )
@@ -1920,6 +1956,7 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
         enum_type(CallerType, length=24), default=CallerType.HUMAN_OPERATOR, nullable=False
     )
     phone_number_id: Mapped[UUID | None] = mapped_column(ForeignKey("phone_numbers.id", ondelete="SET NULL"))
+    sip_trunk_id: Mapped[UUID | None] = mapped_column(index=True)
     customer_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("customers.id", ondelete="SET NULL"), index=True
     )
@@ -1979,6 +2016,12 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             ["tenant_id", "project_id"],
             ["projects.tenant_id", "projects.id"],
             name="fk_calls_tenant_project_projects",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "sip_trunk_id"],
+            ["sip_trunks.tenant_id", "sip_trunks.id"],
+            name="fk_calls_tenant_sip_trunk",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
@@ -2184,6 +2227,224 @@ class TelephonyCommandSubmission(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     correlation_id: Mapped[str] = mapped_column(String(160), nullable=False)
 
 
+class TelephonyChannelReservation(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "telephony_channel_reservations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_telephony_reservations_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "sip_trunk_id"],
+            ["sip_trunks.tenant_id", "sip_trunks.id"],
+            name="fk_telephony_reservations_tenant_trunk",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_telephony_reservations_tenant_call",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_telephony_reservations_tenant_id"),
+        UniqueConstraint("tenant_id", "call_id", name="uq_telephony_reservations_tenant_call"),
+        CheckConstraint("direction IN ('inbound', 'outbound')", name="telephony_reservation_direction_valid"),
+        CheckConstraint(
+            "status IN ('reserved', 'released', 'lost')",
+            name="telephony_reservation_status_valid",
+        ),
+        CheckConstraint("lock_version >= 1", name="telephony_reservation_lock_version_positive"),
+        Index(
+            "ix_telephony_reservations_trunk_active",
+            "tenant_id",
+            "sip_trunk_id",
+            "status",
+            "direction",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    sip_trunk_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID] = mapped_column(index=True)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    pool_key: Mapped[str] = mapped_column(String(24), default="shared", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="reserved", nullable=False, index=True)
+    provider_channel_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    reserved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    release_reason: Mapped[str | None] = mapped_column(String(80))
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class TelephonyResource(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "telephony_resources"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_telephony_resources_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_telephony_resources_tenant_call",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_telephony_resources_tenant_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "resource_type",
+            "provider_resource_id",
+            name="uq_telephony_resources_provider_id",
+        ),
+        CheckConstraint(
+            "resource_type IN ('channel', 'bridge', 'external_media', 'recording')",
+            name="telephony_resource_type_valid",
+        ),
+        CheckConstraint(
+            "status IN ('creating', 'active', 'stopping', 'released', 'orphaned', 'failed')",
+            name="telephony_resource_status_valid",
+        ),
+        CheckConstraint("lock_version >= 1", name="telephony_resource_lock_version_positive"),
+        Index("ix_telephony_resources_call_status", "tenant_id", "call_id", "status"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID] = mapped_column(index=True)
+    resource_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    provider_resource_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    parent_provider_resource_id: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(24), default="creating", nullable=False, index=True)
+    safe_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class CallDetailRecord(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "call_detail_records"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_call_cdr_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_call_cdr_tenant_call",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "sip_trunk_id"],
+            ["sip_trunks.tenant_id", "sip_trunks.id"],
+            name="fk_call_cdr_tenant_trunk",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_call_cdr_tenant_id"),
+        UniqueConstraint("tenant_id", "call_id", name="uq_call_cdr_tenant_call"),
+        CheckConstraint("direction IN ('inbound', 'outbound')", name="call_cdr_direction_valid"),
+        CheckConstraint("duration_seconds >= 0", name="call_cdr_duration_non_negative"),
+        CheckConstraint(
+            "billable_duration_seconds IS NULL OR billable_duration_seconds >= 0",
+            name="call_cdr_billable_duration_non_negative",
+        ),
+        CheckConstraint("channels_used > 0", name="call_cdr_channels_used_positive"),
+        Index("ix_call_cdr_tenant_started", "tenant_id", "started_at"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID] = mapped_column(index=True)
+    sip_trunk_id: Mapped[UUID] = mapped_column(index=True)
+    external_call_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    did_masked: Mapped[str | None] = mapped_column(String(40))
+    destination_masked: Mapped[str | None] = mapped_column(String(40))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disposition: Mapped[str] = mapped_column(String(40), nullable=False)
+    hangup_cause: Mapped[str | None] = mapped_column(String(40))
+    codec: Mapped[str | None] = mapped_column(String(40))
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    billable_duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    channels_used: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    safe_provider_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class TelephonyDiagnosticRun(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "telephony_diagnostic_runs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_telephony_diagnostics_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "sip_trunk_id"],
+            ["sip_trunks.tenant_id", "sip_trunks.id"],
+            name="fk_telephony_diagnostics_tenant_trunk",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_telephony_diagnostics_tenant_call",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "requested_by_user_id"],
+            ["memberships.tenant_id", "memberships.user_id"],
+            name="fk_telephony_diagnostics_tenant_requester",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_telephony_diagnostics_tenant_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "correlation_id",
+            name="uq_telephony_diagnostics_tenant_correlation",
+        ),
+        CheckConstraint("mode IN ('local', 'live')", name="telephony_diagnostic_mode_valid"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'local_test_passed', 'provider_unreachable', "
+            "'live_signaling_verified', 'live_audio_verified', 'degraded', 'failed', 'cancelled')",
+            name="telephony_diagnostic_status_valid",
+        ),
+        CheckConstraint("lock_version >= 1", name="telephony_diagnostic_lock_version_positive"),
+        Index("ix_telephony_diagnostics_tenant_started", "tenant_id", "started_at"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    sip_trunk_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID | None] = mapped_column(index=True)
+    requested_by_user_id: Mapped[UUID] = mapped_column(index=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False, index=True)
+    destination_hash: Mapped[str | None] = mapped_column(String(64))
+    destination_masked: Mapped[str | None] = mapped_column(String(40))
+    signaling_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    inbound_audio_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    outbound_audio_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    dtmf_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    codec: Mapped[str | None] = mapped_column(String(40))
+    media_statistics: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    correlation_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
 class TranscriptSegment(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "transcript_segments"
 
@@ -2239,6 +2500,11 @@ class CallRecording(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             name="retention_state_valid",
         ),
         UniqueConstraint("tenant_id", "id", name="uq_call_recordings_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "provider_recording_id",
+            name="uq_call_recordings_tenant_provider_recording",
+        ),
         Index(
             "ix_call_recordings_tenant_retention",
             "tenant_id",
@@ -2250,9 +2516,13 @@ class CallRecording(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     call_id: Mapped[UUID] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), index=True)
     storage_object_id: Mapped[UUID | None] = mapped_column(index=True)
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    provider_recording_id: Mapped[str | None] = mapped_column(String(200), index=True)
     encryption_key_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="pending_upload", nullable=False)
     recording_paused_ranges: Mapped[list[dict[str, int]]] = mapped_column(JSON, default=list)
     delete_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

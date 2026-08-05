@@ -16,6 +16,7 @@ from teamora_worker.background_jobs import (
 from teamora_worker.config import WorkerSettings
 from teamora_worker.customer_import import CustomerImportProcessor
 from teamora_worker.knowledge_ingestion import KnowledgeIngestionProcessor
+from teamora_worker.recording_upload import RecordingUploadProcessor
 from teamora_worker.storage_maintenance import StorageMaintenance
 
 
@@ -28,6 +29,7 @@ class MaintenanceHandlers:
         self.knowledge = knowledge
         self.storage = StorageMaintenance(settings)
         self.customer_import = CustomerImportProcessor(settings)
+        self.recordings = RecordingUploadProcessor(settings)
 
     def registry(self) -> dict[str, JobHandler]:
         handlers: dict[str, JobHandler] = {
@@ -36,6 +38,7 @@ class MaintenanceHandlers:
             "system.dead_letter_monitor": self.monitor_dead_letters,
             "realtime.outbox_cleanup": self.cleanup_realtime_outbox,
             "customer_import.expired_preview_cleanup": self.cleanup_expired_import_previews,
+            "recording.upload": self.recordings.handle,
         }
         handlers.update(self.storage.registry())
         handlers.update(self.customer_import.registry())

@@ -1,0 +1,52 @@
+services:
+  sip-emulator:
+    build:
+      context: ./infrastructure/telephony-test
+    profiles: ["telephony-test"]
+    restart: "no"
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "sip_emulator.py", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - voice
+
+  asterisk:
+    profiles: ["telephony-test"]
+    ports: !override []
+    environment:
+      SIP_PROVIDER_HOST: sip-emulator
+      SIP_PROVIDER_PORT: 5060
+      SIP_LOCAL_PORT: 5060
+      SIP_PROVIDER_TRANSPORT: udp
+      SIP_AUTH_MODE: ip
+      SIP_ALLOWED_IPS: sip-emulator
+      SIP_CODECS: ulaw
+      SIP_DTMF_MODE: rfc4733
+      SIP_DID: ${TELEPHONY_TEST_DID:?TELEPHONY_TEST_DID is required}
+      ASTERISK_PUBLIC_ADDRESS: asterisk
+      ASTERISK_LOCAL_NET: 172.16.0.0/12
+      ASTERISK_EXTERNAL_MEDIA_HOST: voice-gateway:40000
+      ASTERISK_RTP_PORT_START: 10000
+      ASTERISK_RTP_PORT_END: 10100
+    depends_on:
+      sip-emulator:
+        condition: service_healthy
+
+  voice-gateway:
+    environment:
+      ASTERISK_ARI_URL: http://asterisk:8088
+      ASTERISK_ARI_APPLICATION: teamora-voice
+      ASTERISK_PJSIP_ENDPOINT: provider-endpoint
+      ASTERISK_EXTERNAL_MEDIA_HOST: voice-gateway:40000
+      ASTERISK_EXTERNAL_MEDIA_TRANSPORT: udp
+      ASTERISK_RTP_BIND_HOST: 0.0.0.0
+      ASTERISK_RTP_PORT_START: 40000
+      ASTERISK_RTP_PORT_END: 40099
+    depends_on:
+      asterisk:
+        condition: service_healthy

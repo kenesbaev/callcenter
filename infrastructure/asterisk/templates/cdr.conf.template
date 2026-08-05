@@ -1,5 +1,7 @@
 [general]
-enable=yes
+; Canonical masked CDR is persisted by FastAPI. Native flat-file CDR is
+; disabled to avoid writing unmasked telephone numbers into container logs.
+enable=no
 unanswered=yes
 congestion=yes
 endbeforehexten=no

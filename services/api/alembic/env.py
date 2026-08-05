@@ -4,6 +4,7 @@ import asyncio
 from logging.config import fileConfig
 
 from sqlalchemy import pool
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
@@ -18,6 +19,10 @@ if config.config_file_name is not None:
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.migration_database_url or settings.database_url)
 config.set_main_option("teamora.minio_bucket", settings.minio_bucket)
+config.set_main_option(
+    "teamora.app_role",
+    make_url(settings.database_url).username or "teamora_app",
+)
 target_metadata = Base.metadata
 
 

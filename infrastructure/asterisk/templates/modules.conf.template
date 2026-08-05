@@ -5,3 +5,4 @@ preload=res_ari.so
 preload=res_ari_channels.so
 preload=chan_pjsip.so
 noload=chan_sip.so
+noload=res_manager_devicestate.so

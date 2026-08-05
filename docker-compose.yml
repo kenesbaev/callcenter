@@ -134,6 +134,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: http://minio:9000
+      ASTERISK_RECORDINGS_PATH: /var/spool/asterisk/monitor
+    volumes:
+      - asterisk-recordings:/var/spool/asterisk/monitor:ro
     depends_on:
       postgres:
         condition: service_healthy

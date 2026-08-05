@@ -8,6 +8,7 @@ import type {
 } from "@teamora/contracts";
 import { telephonyCommandNames } from "@teamora/contracts";
 import { logger } from "./logger.js";
+import type { RtpDiagnosticAdapter } from "./rtp-diagnostic.js";
 
 const safeParameter = z.union([z.string(), z.number(), z.boolean()]);
 const commandSchema = z
@@ -25,12 +26,19 @@ const commandSchema = z
     parameters: z.record(z.string(), safeParameter),
   })
   .strict();
+const localMediaTestSchema = z
+  .object({
+    codec: z.enum(["ulaw", "alaw"]),
+    packets: z.number().int().min(10).max(500),
+  })
+  .strict();
 
 export type GatewayInternalApiOptions = {
   serviceToken: string;
   trustedHosts: string[];
   maxBodyBytes: number;
   provider?: TelephonyProvider;
+  mediaAdapter?: RtpDiagnosticAdapter;
 };
 
 type CachedCommand = {
@@ -48,7 +56,10 @@ export function createGatewayRequestHandler(
     const correlationId = safeCorrelationId(request);
     response.setHeader("x-correlation-id", correlationId);
 
-    if (path !== "/internal/v1/telephony/commands") return false;
+    const isCommand = path === "/internal/v1/telephony/commands";
+    const isLocalMediaTest =
+      path === "/internal/v1/telephony/diagnostics/local-media";
+    if (!isCommand && !isLocalMediaTest) return false;
     if (request.method !== "POST") {
       json(response, 405, error("method_not_allowed", "POST is required"));
       return true;
@@ -107,6 +118,52 @@ export function createGatewayRequestHandler(
         400,
         error("json_invalid", "Request body is not valid JSON"),
       );
+      return true;
+    }
+    if (isLocalMediaTest) {
+      const diagnostic = localMediaTestSchema.safeParse(parsedJson);
+      if (!diagnostic.success) {
+        json(
+          response,
+          422,
+          error("diagnostic_invalid", "Local media diagnostic is invalid"),
+        );
+        return true;
+      }
+      if (!options.mediaAdapter) {
+        json(
+          response,
+          503,
+          error(
+            "rtp_adapter_unavailable",
+            "RTP diagnostic adapter is unavailable",
+          ),
+        );
+        return true;
+      }
+      try {
+        const result = await options.mediaAdapter.runLocalTest(
+          diagnostic.data.codec,
+          diagnostic.data.packets,
+        );
+        json(response, 200, result);
+      } catch (diagnosticError) {
+        logger.warn(
+          {
+            correlationId,
+            code:
+              diagnosticError instanceof Error
+                ? diagnosticError.name
+                : "diagnostic_error",
+          },
+          "local RTP diagnostic failed",
+        );
+        json(
+          response,
+          409,
+          error("rtp_diagnostic_failed", "Local RTP diagnostic failed"),
+        );
+      }
       return true;
     }
     const parsed = commandSchema.safeParse(parsedJson);

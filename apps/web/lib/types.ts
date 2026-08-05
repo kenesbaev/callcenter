@@ -1244,6 +1244,64 @@ export type Integration = {
   note: string;
 };
 
+export type TelephonyChannelUsage = {
+  trunk_id: string;
+  name: string;
+  pool_mode: "shared" | "separate";
+  limit: number;
+  inbound_limit: number | null;
+  outbound_limit: number | null;
+  occupied: number;
+  inbound_occupied: number;
+  outbound_occupied: number;
+  available: number;
+};
+
+export type TelephonyStatus = {
+  status:
+    | "not_configured"
+    | "configured"
+    | "local_test_passed"
+    | "provider_unreachable"
+    | "registered"
+    | "reachable"
+    | "live_signaling_verified"
+    | "live_audio_verified"
+    | "degraded"
+    | "failed";
+  asterisk: string;
+  ari: string;
+  sip_trunk: string;
+  registration: string;
+  reachability: string;
+  external_media: string;
+  recording: string;
+  dids: string[];
+  transport: string | null;
+  codecs: string[];
+  channel_usage: TelephonyChannelUsage[];
+  last_checked_at: string | null;
+  last_safe_error: string | null;
+  live_signaling_verified: boolean;
+  live_audio_verified: boolean;
+};
+
+export type TelephonyDiagnostic = {
+  id: string;
+  mode: "local" | "live";
+  status: string;
+  destination_masked: string | null;
+  signaling_verified: boolean;
+  inbound_audio_verified: boolean;
+  outbound_audio_verified: boolean;
+  dtmf_verified: boolean;
+  codec: string | null;
+  media_statistics: Record<string, unknown>;
+  safe_error_code: string | null;
+  started_at: string;
+  completed_at: string | null;
+};
+
 export type TenantSettings = {
   timezone: string;
   default_language: "ru" | "en" | "uz" | "kaa";

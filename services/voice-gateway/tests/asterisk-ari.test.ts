@@ -33,6 +33,10 @@ describe("AsteriskAriProvider", () => {
       username: "ari-user",
       password: "ari-secret",
       externalHost: "gateway.internal:60000",
+      application: "teamora-voice",
+      pjsipEndpoint: "provider-endpoint",
+      mediaFormat: "ulaw",
+      transport: "udp",
       fetchImplementation,
     });
 
@@ -55,12 +59,14 @@ describe("AsteriskAriProvider", () => {
     expect(calls.map((entry) => entry.url)).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "/ari/channels?endpoint=PJSIP%2F%2B998901234567",
+          "/ari/channels?endpoint=PJSIP%2F%2B998901234567%40provider-endpoint",
         ),
         expect.stringContaining("/ari/channels/ari-channel-1/answer"),
         expect.stringContaining("/ari/channels/ari-channel-1/hold"),
         expect.stringContaining("/ari/channels/ari-channel-1/continue"),
-        expect.stringContaining("/ari/channels/ari-channel-1/record"),
+        expect.stringContaining(
+          "/ari/bridges/teamora-bridge-10000000-0000-4000-8000-000000000003/record",
+        ),
         expect.stringContaining(
           "/ari/recordings/live/teamora-10000000-0000-4000-8000-000000000003",
         ),
@@ -69,5 +75,39 @@ describe("AsteriskAriProvider", () => {
     );
     expect(JSON.stringify(calls)).not.toContain("ari-secret");
     expect(fetchImplementation).toHaveBeenCalledTimes(12);
+    const externalMedia = calls.find((entry) =>
+      entry.url.includes("/ari/channels/externalMedia"),
+    );
+    expect(externalMedia?.url).toContain("transport=udp");
+    expect(externalMedia?.url).toContain("encapsulation=rtp");
+    expect(externalMedia?.url).toContain("direction=both");
+  });
+
+  it("creates idempotent bridge and channel resource requests", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const fetchImplementation = fetchMock as typeof fetch;
+    const provider = new AsteriskAriProvider({
+      baseUrl: "http://ari.local:8088",
+      username: "ari-user",
+      password: "ari-secret",
+      externalHost: "gateway.internal:60000",
+      fetchImplementation,
+    });
+    await provider.createBridge("teamora-bridge-call-id");
+    await provider.addChannelToBridge(
+      "teamora-bridge-call-id",
+      "customer-channel-id",
+    );
+    await provider.destroyBridge("teamora-bridge-call-id");
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringContaining("/ari/bridges?type=mixing%2Cproxy_media"),
+      expect.stringContaining(
+        "/ari/bridges/teamora-bridge-call-id/addChannel?channel=customer-channel-id",
+      ),
+      expect.stringContaining("/ari/bridges/teamora-bridge-call-id"),
+    ]);
   });
 });

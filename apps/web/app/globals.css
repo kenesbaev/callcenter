@@ -1844,6 +1844,60 @@ button:disabled {
   line-height: 1.55;
 }
 
+.telephony-integration-card {
+  grid-column: span 2;
+}
+
+.telephony-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.telephony-status-grid span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid var(--tv-border);
+  border-radius: 9px;
+  padding: 8px;
+  color: var(--tv-text-muted);
+  font-size: 10px;
+}
+
+.telephony-status-grid strong {
+  overflow: hidden;
+  color: var(--tv-text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.telephony-diagnostic-controls {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  border-top: 1px solid var(--tv-border);
+  padding-top: 14px;
+}
+
+.telephony-diagnostic-controls label {
+  display: grid;
+  gap: 5px;
+  color: var(--tv-text-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 1100px) {
+  .telephony-integration-card {
+    grid-column: 1 / -1;
+  }
+
+  .telephony-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .capability-list {
   display: flex;
   flex-wrap: wrap;

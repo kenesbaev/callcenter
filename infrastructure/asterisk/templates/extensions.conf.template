@@ -4,9 +4,15 @@ writeprotect=yes
 autofallthrough=yes
 
 [teamora-inbound]
-exten => ${SIP_DID},1,NoOp(Teamora inbound DID ${SIP_DID})
+exten => _X!,1,NoOp(Teamora inbound call)
  same => n,Set(CHANNEL(hangup_handler_push)=teamora-cleanup,s,1)
- same => n,Stasis(teamora-voice,inbound,${EXTEN})
+ same => n,Set(TEAMORA_SOURCE=${CHANNEL(pjsip,remote_addr)})
+ same => n,Stasis(${ASTERISK_ARI_APPLICATION},inbound,${EXTEN},${TEAMORA_SOURCE})
+ same => n,Hangup()
+exten => _+X!,1,NoOp(Teamora inbound E.164 call)
+ same => n,Set(CHANNEL(hangup_handler_push)=teamora-cleanup,s,1)
+ same => n,Set(TEAMORA_SOURCE=${CHANNEL(pjsip,remote_addr)})
+ same => n,Stasis(${ASTERISK_ARI_APPLICATION},inbound,${EXTEN},${TEAMORA_SOURCE})
  same => n,Hangup()
 
 [teamora-transfer]

@@ -12,6 +12,8 @@ type AsteriskOptions = {
   password: string;
   externalHost: string;
   application?: string;
+  pjsipEndpoint?: string;
+  mediaFormat?: string;
   transport?: "websocket" | "udp";
   timeoutMs?: number;
   fetchImplementation?: typeof fetch;
@@ -29,6 +31,7 @@ export class AsteriskAriProvider implements TelephonyProvider {
   readonly name = "asterisk-ari";
   readonly status = "configured" as const;
   private readonly fetchImplementation: typeof fetch;
+  private readonly channelContexts = new Map<string, TelephonyCommandContext>();
 
   constructor(private readonly options: AsteriskOptions) {
     this.fetchImplementation = options.fetchImplementation ?? fetch;
@@ -41,14 +44,18 @@ export class AsteriskAriProvider implements TelephonyProvider {
     const toNumber = requiredString(parameters.toNumber, "toNumber");
     const callerId = requiredString(parameters.fromNumber, "fromNumber");
     const channelId = `teamora-${context.callId}`;
+    const endpoint = this.options.pjsipEndpoint
+      ? `PJSIP/${toNumber}@${this.options.pjsipEndpoint}`
+      : `PJSIP/${toNumber}`;
     const query = new URLSearchParams({
-      endpoint: `PJSIP/${toNumber}`,
+      endpoint,
       app: this.options.application ?? "teamora-voice",
       appArgs: context.callId,
       callerId,
       channelId,
     });
     await this.request(`/channels?${query.toString()}`, { method: "POST" });
+    this.channelContexts.set(channelId, context);
     return result(context, this.name, "ringing", channelId);
   }
 
@@ -109,7 +116,9 @@ export class AsteriskAriProvider implements TelephonyProvider {
       method: "GET",
     });
     const state = normalizeAriState(
-      typeof payload?.state === "string" ? payload.state : "unknown",
+      payload && !Array.isArray(payload) && typeof payload.state === "string"
+        ? payload.state
+        : "unknown",
     );
     return result(context, this.name, state);
   }
@@ -124,7 +133,10 @@ export class AsteriskAriProvider implements TelephonyProvider {
       ifExists: "fail",
       beep: "false",
     });
-    await this.request(`/channels/${channel(context)}/record?${query}`, {
+    // Record the mixing bridge, not the customer channel: ARI rejects a
+    // channel recording once that channel is already part of a bridge, and a
+    // bridge recording is also what captures both SIP and External Media.
+    await this.request(`/bridges/${bridge(context)}/record?${query}`, {
       method: "POST",
     });
     return result(context, this.name, "active", undefined, { recordingId });
@@ -172,7 +184,7 @@ export class AsteriskAriProvider implements TelephonyProvider {
       app: this.options.application ?? "teamora-voice",
       channelId: mediaId,
       external_host: this.options.externalHost,
-      format: "slin16",
+      format: this.options.mediaFormat ?? "ulaw",
       transport,
       encapsulation: transport === "udp" ? "rtp" : "none",
       connection_type: "client",
@@ -181,13 +193,66 @@ export class AsteriskAriProvider implements TelephonyProvider {
     await this.request(`/channels/externalMedia?${query.toString()}`, {
       method: "POST",
     });
+    this.channelContexts.set(mediaId, context);
     return result(context, this.name, "active", undefined, { mediaId });
   }
 
-  private async request(
+  contextForChannel(channelId: string): TelephonyCommandContext | undefined {
+    return this.channelContexts.get(channelId);
+  }
+
+  registerChannelContext(
+    channelId: string,
+    context: TelephonyCommandContext,
+  ): void {
+    this.channelContexts.set(channelId, context);
+  }
+
+  forgetChannel(channelId: string): void {
+    this.channelContexts.delete(channelId);
+  }
+
+  async createBridge(bridgeId: string): Promise<void> {
+    const query = new URLSearchParams({ type: "mixing,proxy_media", bridgeId });
+    await this.request(`/bridges?${query.toString()}`, { method: "POST" });
+  }
+
+  async addChannelToBridge(bridgeId: string, channelId: string): Promise<void> {
+    const query = new URLSearchParams({ channel: channelId });
+    await this.request(
+      `/bridges/${encodeURIComponent(bridgeId)}/addChannel?${query}`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
+  async destroyBridge(bridgeId: string): Promise<void> {
+    await this.request(`/bridges/${encodeURIComponent(bridgeId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listChannels(): Promise<Array<Record<string, unknown>>> {
+    const result = await this.request("/channels", { method: "GET" });
+    return Array.isArray(result)
+      ? (result as Array<Record<string, unknown>>)
+      : [];
+  }
+
+  async listBridges(): Promise<Array<Record<string, unknown>>> {
+    const result = await this.request("/bridges", { method: "GET" });
+    return Array.isArray(result)
+      ? (result as Array<Record<string, unknown>>)
+      : [];
+  }
+
+  async request(
     path: string,
     init: RequestInit,
-  ): Promise<Record<string, unknown> | undefined> {
+  ): Promise<
+    Record<string, unknown> | Array<Record<string, unknown>> | undefined
+  > {
     const response = await this.fetchImplementation(
       `${this.options.baseUrl.replace(/\/$/, "")}/ari${path}`,
       {
@@ -203,13 +268,18 @@ export class AsteriskAriProvider implements TelephonyProvider {
     if (response.status === 204) return undefined;
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("application/json")) return undefined;
-    return (await response.json()) as Record<string, unknown>;
+    return (await response.json()) as
+      Record<string, unknown> | Array<Record<string, unknown>>;
   }
 }
 
 function channel(context: TelephonyCommandContext): string {
   if (!context.providerCallId) throw new Error("providerCallId is required");
   return encodeURIComponent(context.providerCallId);
+}
+
+function bridge(context: TelephonyCommandContext): string {
+  return encodeURIComponent(`teamora-bridge-${context.callId}`);
 }
 
 function recording(context: TelephonyCommandContext): string {

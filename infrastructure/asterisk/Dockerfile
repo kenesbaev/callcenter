@@ -7,8 +7,9 @@ RUN apt-get update \
 COPY templates /opt/teamora/templates
 COPY entrypoint.sh /usr/local/bin/teamora-asterisk-entrypoint
 RUN chmod 0755 /usr/local/bin/teamora-asterisk-entrypoint \
-    && mkdir -p /var/log/asterisk/cdr-csv /var/spool/asterisk/monitor \
-    && chown -R asterisk:asterisk /etc/asterisk /var/log/asterisk /var/spool/asterisk
+    && mkdir -p /var/log/asterisk/cdr-csv /var/spool/asterisk/monitor /var/run/asterisk \
+    && ln -s monitor /var/spool/asterisk/recording \
+    && chown -R asterisk:asterisk /etc/asterisk /var/log/asterisk /var/spool/asterisk /var/run/asterisk
 
 USER asterisk
 ENTRYPOINT ["/usr/local/bin/teamora-asterisk-entrypoint"]

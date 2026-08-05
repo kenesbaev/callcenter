@@ -47,6 +47,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         "/api/v1/team/invitations/accept",
         "/api/v1/webhooks/openai",
         "/api/v1/webhooks/telephony",
+        "/api/v1/webhooks/telephony/inbound",
     }
 
     async def dispatch(

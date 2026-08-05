@@ -17,7 +17,7 @@ from teamora_api.enums import (
     TelephonyCommandName,
 )
 from teamora_api.errors import ApiError
-from teamora_api.models import Call, CallEvent
+from teamora_api.models import Call, CallEvent, TelephonyDiagnosticRun
 from teamora_api.realtime import enqueue_analytics_invalidation, enqueue_realtime_event
 
 TERMINAL_CALL_STATES = frozenset(
@@ -193,6 +193,10 @@ SAFE_PROVIDER_METADATA_KEYS = frozenset(
         "recordingState",
         "rawCause",
         "cause",
+        "codec",
+        "dtmfDigit",
+        "packetsReceived",
+        "packetsSent",
     }
 )
 
@@ -261,6 +265,105 @@ def normalize_provider_metadata(
 
 
 class CallStateService:
+    async def record_provider_information(
+        self,
+        session: AsyncSession,
+        *,
+        call: Call,
+        event_type: str,
+        provider: str,
+        provider_event_id: str,
+        occurred_at: datetime,
+        provider_timestamp: datetime | None,
+        external_call_id: str | None,
+        correlation_id: str,
+        safe_payload: Mapping[str, object],
+    ) -> StateTransitionResult:
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended(
+                        f"provider-event:{call.tenant_id}:{provider}:{provider_event_id}", 0
+                    )
+                )
+            )
+        )
+        duplicate = await session.scalar(
+            select(CallEvent.id).where(
+                CallEvent.tenant_id == call.tenant_id,
+                CallEvent.provider == provider,
+                CallEvent.provider_event_id == provider_event_id,
+            )
+        )
+        if duplicate is not None:
+            return StateTransitionResult(call.status, call.state_version, False, "duplicate")
+        metadata = normalize_provider_metadata(safe_payload)
+        timestamp = _utc(provider_timestamp or occurred_at)
+        await append_call_event(
+            session,
+            tenant_id=call.tenant_id,
+            call_id=call.id,
+            event_type=event_type,
+            safe_payload={"state_version": call.state_version, **metadata},
+            provider=provider,
+            provider_event_id=provider_event_id,
+            external_call_id=external_call_id,
+            occurred_at=occurred_at,
+            provider_timestamp=provider_timestamp,
+            correlation_id=correlation_id,
+        )
+        if call.last_provider_event_at is None or timestamp > _utc(call.last_provider_event_at):
+            call.last_provider_event_at = timestamp
+        call.provider_metadata = {**(call.provider_metadata or {}), **metadata}
+        await self._sync_provider_resource(session, call=call, event_type=event_type, payload=metadata)
+        if event_type == "recording.finished":
+            recording_id = metadata.get("recordingId")
+            if isinstance(recording_id, str) and recording_id:
+                from teamora_api.telephony.control import schedule_recording_upload
+
+                await schedule_recording_upload(
+                    session,
+                    call=call,
+                    provider_recording_id=recording_id,
+                    correlation_id=correlation_id,
+                )
+        return StateTransitionResult(call.status, call.state_version, False, "informational")
+
+    async def _sync_provider_resource(
+        self,
+        session: AsyncSession,
+        *,
+        call: Call,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        from teamora_api.telephony.control import record_resource
+
+        specifications = {
+            "bridge.created": ("bridge", "bridgeId", "active"),
+            "bridge.destroyed": ("bridge", "bridgeId", "released"),
+            "external_media.created": ("external_media", "mediaId", "active"),
+            "external_media.destroyed": ("external_media", "mediaId", "released"),
+            "recording.started": ("recording", "recordingId", "active"),
+            "recording.finished": ("recording", "recordingId", "released"),
+            "recording.failed": ("recording", "recordingId", "failed"),
+        }
+        spec = specifications.get(event_type)
+        if spec is None:
+            return
+        resource_type, id_key, status = spec
+        resource_id = payload.get(id_key)
+        if not isinstance(resource_id, str) or not resource_id:
+            return
+        await record_resource(
+            session,
+            call=call,
+            resource_type=resource_type,
+            provider_resource_id=resource_id,
+            status=status,
+            safe_metadata=dict(payload),
+        )
+
     async def transition(
         self,
         session: AsyncSession,
@@ -398,6 +501,18 @@ class CallStateService:
             correlation_id=correlation_id,
             reason="call_state_changed",
         )
+        if target in TERMINAL_CALL_STATES:
+            # Resource accounting follows the same transaction as the canonical
+            # terminal transition, so a crash cannot leak a reserved SIP channel.
+            from teamora_api.telephony.control import (
+                finalize_cdr,
+                release_call_channel,
+                release_call_resources,
+            )
+
+            await release_call_channel(session, call=call, reason=target.value)
+            await release_call_resources(session, call=call)
+            await finalize_cdr(session, call=call)
         return StateTransitionResult(target, call.state_version, True)
 
     async def ingest_provider_event(
@@ -515,11 +630,17 @@ class CallStateService:
                 provider_timestamp=provider_timestamp,
                 correlation_id=correlation_id,
             )
+            await _confirm_live_signaling(
+                session,
+                call=call,
+                event_type=event_type,
+                occurred_at=event_timestamp,
+            )
             return StateTransitionResult(call.status, call.state_version, False)
 
         raw_cause = safe_payload.get("rawCause")
         try:
-            return await self.transition(
+            result = await self.transition(
                 session,
                 call=call,
                 target=target,
@@ -535,6 +656,13 @@ class CallStateService:
                 hangup_cause=_provider_hangup_cause(target, safe_payload),
                 raw_provider_cause=raw_cause if isinstance(raw_cause, str) else None,
             )
+            await _confirm_live_signaling(
+                session,
+                call=call,
+                event_type=event_type,
+                occurred_at=event_timestamp,
+            )
+            return result
         except ApiError as exc:
             if exc.code != "call_state_transition_invalid":
                 raise
@@ -604,6 +732,35 @@ class CallStateService:
             False,
             reason,
         )
+
+
+async def _confirm_live_signaling(
+    session: AsyncSession,
+    *,
+    call: Call,
+    event_type: str,
+    occurred_at: datetime,
+) -> None:
+    """Promote a live diagnostic only after a real provider signaling event."""
+
+    if event_type not in {"call.ringing", "call.answered", "call.busy", "call.no_answer"}:
+        return
+    run = await session.scalar(
+        select(TelephonyDiagnosticRun)
+        .where(
+            TelephonyDiagnosticRun.tenant_id == call.tenant_id,
+            TelephonyDiagnosticRun.call_id == call.id,
+            TelephonyDiagnosticRun.mode == "live",
+        )
+        .with_for_update()
+    )
+    if run is None or run.signaling_verified:
+        return
+    run.signaling_verified = True
+    run.status = "live_signaling_verified"
+    run.safe_error_code = None
+    run.completed_at = occurred_at
+    run.lock_version += 1
 
 
 def _semantic_realtime_event(

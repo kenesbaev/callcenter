@@ -35,6 +35,7 @@ from teamora_api.models import (
     TelephonyCommandSubmission,
 )
 from teamora_api.schemas.telephony import TelephonyCommand, TelephonyCommandResult
+from teamora_api.telephony.control import bind_provider_channel, release_call_channel, reserve_channel
 from teamora_api.telephony.providers import (
     GatewayTelephonyProvider,
     MockTelephonyProvider,
@@ -49,6 +50,7 @@ class ProviderSelection:
     from_number: str
     channel: CallChannel
     is_demo: bool
+    sip_trunk_id: UUID | None = None
 
 
 class TelephonyService:
@@ -71,6 +73,7 @@ class TelephonyService:
         tenant_id: UUID,
         project: Project,
         requested_from_number: str | None = None,
+        allow_live_diagnostic: bool = False,
     ) -> ProviderSelection:
         if project.outbound_phone_number_id is not None:
             row = (
@@ -87,12 +90,19 @@ class TelephonyService:
                 )
             ).first()
             if row is not None:
+                if not (self.settings.telephony_outbound_dialer_enabled or allow_live_diagnostic):
+                    raise ApiError(
+                        409,
+                        "live_outbound_restricted",
+                        "Live outbound calls are restricted to the controlled diagnostic endpoint",
+                    )
                 provider = self._gateway_provider or GatewayTelephonyProvider(self.settings)
                 return ProviderSelection(
                     provider=provider,
                     from_number=row[0].e164,
                     channel=CallChannel.SIP,
                     is_demo=False,
+                    sip_trunk_id=row[1].id,
                 )
         if self.settings.mock_telephony_available:
             provider = self._mock_provider or MockTelephonyProvider(self.settings)
@@ -101,6 +111,7 @@ class TelephonyService:
                 from_number=requested_from_number or project.outbound_number or "MOCK",
                 channel=CallChannel.DEVELOPMENT_SIMULATOR,
                 is_demo=True,
+                sip_trunk_id=None,
             )
         raise ApiError(
             503,
@@ -123,6 +134,7 @@ class TelephonyService:
                 from_number=call.from_number or "MOCK",
                 channel=CallChannel.DEVELOPMENT_SIMULATOR,
                 is_demo=True,
+                sip_trunk_id=None,
             )
         if call.provider == "asterisk-ari":
             provider = self._gateway_provider or GatewayTelephonyProvider(self.settings)
@@ -131,6 +143,7 @@ class TelephonyService:
                 from_number=call.from_number or "",
                 channel=CallChannel.SIP,
                 is_demo=False,
+                sip_trunk_id=call.sip_trunk_id,
             )
         return await self.select_provider(
             session,
@@ -191,21 +204,30 @@ class TelephonyService:
                 "Call state was changed by another operation",
             )
         validate_command_state(call, command_name)
+        if command_name == TelephonyCommandName.ORIGINATE and selection.sip_trunk_id is not None:
+            await reserve_channel(
+                session,
+                call=call,
+                trunk_id=selection.sip_trunk_id,
+                direction=call.direction,
+            )
 
-        command = TelephonyCommand(
-            command=command_name,
-            tenant_id=call.tenant_id,
-            project_id=project.id,
-            call_id=call.id,
-            provider_call_id=call.external_call_id,
-            command_id=uuid4(),
-            idempotency_key=key,
-            timestamp=datetime.now(UTC),
-            correlation_id=correlation_id,
-            parameters={
-                **(parameters or {}),
-                "currentState": call.provider_state,
-            },
+        command = TelephonyCommand.model_validate(
+            {
+                "command": command_name,
+                "tenantId": call.tenant_id,
+                "projectId": project.id,
+                "callId": call.id,
+                "providerCallId": call.external_call_id,
+                "commandId": uuid4(),
+                "idempotencyKey": key,
+                "timestamp": datetime.now(UTC),
+                "correlationId": correlation_id,
+                "parameters": {
+                    **(parameters or {}),
+                    "currentState": call.provider_state,
+                },
+            }
         )
         submission = TelephonyCommandSubmission(
             tenant_id=call.tenant_id,
@@ -236,6 +258,8 @@ class TelephonyService:
             )
             submission.status = "failed"
             submission.error_code = provider_error.code
+            if command_name == TelephonyCommandName.ORIGINATE:
+                await release_call_channel(session, call=call, reason=provider_error.code)
             if command_name == TelephonyCommandName.ORIGINATE:
                 await self.state_service.transition(
                     session,
@@ -268,6 +292,12 @@ class TelephonyService:
         submission.status = "succeeded"
         submission.response_payload = result.model_dump(mode="json", by_alias=True)
         submission.external_call_id = result.provider_call_id
+        if result.provider_call_id:
+            await bind_provider_channel(
+                session,
+                call=call,
+                provider_channel_id=result.provider_call_id,
+            )
         await self._apply_result(
             session,
             call=call,

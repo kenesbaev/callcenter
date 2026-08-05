@@ -321,6 +321,7 @@ async def test_provider_is_selected_from_project_telephony_configuration(
             session,
             tenant_id=tenant_id,
             project=project,
+            allow_live_diagnostic=True,
         )
         assert selection.provider.name == "asterisk-ari"
         assert selection.from_number == number.e164

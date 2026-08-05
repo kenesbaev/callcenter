@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     gateway_internal_url: str = "http://voice-gateway:8787"
     gateway_command_timeout_seconds: float = Field(default=5.0, ge=0.25, le=30.0)
     allow_mock_telephony_in_production: bool = False
+    telephony_live_diagnostic_enabled: bool = False
+    telephony_live_test_numbers: str = ""
+    telephony_outbound_dialer_enabled: bool = False
+    telephony_provider_event_tolerance_seconds: int = Field(default=300, ge=30, le=900)
+    telephony_channel_lease_seconds: int = Field(default=120, ge=30, le=600)
+    telephony_safe_dial_prefixes: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -95,6 +101,14 @@ class Settings(BaseSettings):
     @property
     def mock_telephony_available(self) -> bool:
         return self.app_env in {"development", "test"} or self.allow_mock_telephony_in_production
+
+    @property
+    def live_test_number_allowlist(self) -> frozenset[str]:
+        return frozenset(item.strip() for item in self.telephony_live_test_numbers.split(",") if item.strip())
+
+    @property
+    def safe_dial_prefixes(self) -> tuple[str, ...]:
+        return tuple(item.strip() for item in self.telephony_safe_dial_prefixes.split(",") if item.strip())
 
     @model_validator(mode="after")
     def reject_insecure_production_defaults(self) -> Settings:

@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -14,6 +15,8 @@ class WorkerSettings(BaseSettings):
     minio_bucket: str = "teamora-private"
     minio_root_user: str = ""
     minio_root_password: str = ""
+    asterisk_recordings_path: Path = Path("/var/spool/asterisk/monitor")
+    recording_max_file_bytes: int = Field(default=1024 * 1024 * 1024, ge=1024)
     knowledge_max_pdf_pages: int = 500
     knowledge_max_file_bytes: int = 25 * 1024 * 1024
     knowledge_max_extracted_chars: int = 5_000_000
@@ -47,6 +50,7 @@ class WorkerSettings(BaseSettings):
             "customer_import.process": 1,
             "retention.purge": 1,
             "storage.orphan_scan": 1,
+            "recording.upload": 1,
         },
         validation_alias="BACKGROUND_JOB_TYPE_CONCURRENCY_MAP",
     )

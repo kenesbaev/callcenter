@@ -732,6 +732,16 @@ async def _sync_cancelled_domain(
 ) -> None:
     """Converge linked domain state when a durable job is cancelled."""
 
+    if job.job_type == "recording.upload":
+        recording_id = _payload_uuid_or_none(job.safe_payload.get("recording_id"))
+        if recording_id is not None:
+            await connection.execute(
+                "UPDATE call_recordings SET status='failed', updated_at=now() "
+                "WHERE tenant_id=$1 AND id=$2 AND status<>'available'",
+                job.tenant_id,
+                recording_id,
+            )
+        return
     if job.job_type.startswith("customer_import."):
         import_id = _payload_uuid_or_none(job.safe_payload.get("import_id"))
         if import_id is not None:
@@ -785,6 +795,16 @@ async def _sync_failed_domain(
 ) -> None:
     """Converge linked domain state after a terminal common-job failure."""
 
+    if job.job_type == "recording.upload":
+        recording_id = _payload_uuid_or_none(job.safe_payload.get("recording_id"))
+        if recording_id is not None:
+            await connection.execute(
+                "UPDATE call_recordings SET status='failed', updated_at=now() "
+                "WHERE tenant_id=$1 AND id=$2 AND status<>'available'",
+                job.tenant_id,
+                recording_id,
+            )
+        return
     if job.job_type.startswith("customer_import."):
         import_id = _payload_uuid_or_none(job.safe_payload.get("import_id"))
         if import_id is not None:
