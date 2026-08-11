@@ -1251,7 +1251,11 @@ async def get_call(
                 sequence=segment.sequence,
                 speaker=segment.speaker,
                 language=segment.language,
+                language_code=segment.language_code,
                 text=segment.text,
+                provider_item_id=segment.provider_item_id,
+                is_final=segment.is_final,
+                interrupted=segment.interrupted,
                 created_at=segment.created_at,
             )
             for segment in segments

@@ -2,11 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { PhoneCall, PlugZap, RadioTower } from "lucide-react";
+import { Bot, PhoneCall, PlugZap, RadioTower } from "lucide-react";
 import { Button, StatusBadge } from "@teamora/ui";
 import { apiRequest } from "@/lib/api";
 import type {
   AuthResponse,
+  AIRealtimeDiagnostic,
+  AIRealtimeStatus,
   Integration,
   Page,
   Project,
@@ -26,7 +28,8 @@ export function IntegrationsView() {
   const queryClient = useQueryClient();
   const [projectId, setProjectId] = useState("");
   const [liveNumber, setLiveNumber] = useState("");
-  const [notice, setNotice] = useState("");
+  const [telephonyNotice, setTelephonyNotice] = useState("");
+  const [aiNotice, setAiNotice] = useState("");
   const me = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => apiRequest<AuthResponse>("/auth/me"),
@@ -34,6 +37,14 @@ export function IntegrationsView() {
   const integrations = useQuery({
     queryKey: ["integrations"],
     queryFn: () => apiRequest<Integration[]>("/integrations"),
+  });
+  const realtimeAI = useQuery({
+    queryKey: ["ai-realtime", "status"],
+    queryFn: () => apiRequest<AIRealtimeStatus>("/ai-realtime/status"),
+    enabled:
+      me.data?.user.role === "tenant_owner" ||
+      me.data?.user.role === "tenant_manager",
+    refetchInterval: 30_000,
   });
   const telephony = useQuery({
     queryKey: ["telephony", "status"],
@@ -63,7 +74,7 @@ export function IntegrationsView() {
         }),
       }),
     onSuccess: (result) => {
-      setNotice(
+      setTelephonyNotice(
         result.status === "local_test_passed"
           ? "Локальный RTP-тест подтверждён в обоих направлениях."
           : `Локальный тест завершён: ${result.safe_error_code ?? result.status}`,
@@ -83,8 +94,22 @@ export function IntegrationsView() {
         }),
       }),
     onSuccess: (result) => {
-      setNotice(`Диагностический вызов: ${result.status}.`);
+      setTelephonyNotice(`Диагностический вызов: ${result.status}.`);
       void queryClient.invalidateQueries({ queryKey: ["telephony"] });
+    },
+  });
+  const localAiTest = useMutation({
+    mutationFn: () =>
+      apiRequest<AIRealtimeDiagnostic>("/ai-realtime/diagnostics/local", {
+        method: "POST",
+      }),
+    onSuccess: (result) => {
+      setAiNotice(
+        result.status === "local_mock_passed"
+          ? `Mock Realtime: VAD, transcript и usage подтверждены; ${result.outputBytes} байт audio.`
+          : `Mock Realtime завершён со статусом ${result.status}.`,
+      );
+      void queryClient.invalidateQueries({ queryKey: ["ai-realtime"] });
     },
   });
   if (integrations.isPending) return <SectionSkeleton />;
@@ -102,6 +127,117 @@ export function IntegrationsView() {
         <h1>Интеграции</h1>
       </div>
       <div className="integration-grid">
+        {(me.data?.user.role === "tenant_owner" ||
+          me.data?.user.role === "tenant_manager") && (
+          <article className="panel integration-card ai-realtime-card">
+            <div className="integration-mark">
+              <Bot aria-hidden="true" size={20} />
+            </div>
+            <div className="row-between">
+              <h2>OpenAI Realtime Voice AI</h2>
+              <StatusBadge
+                tone={
+                  realtimeAI.data?.enabled && realtimeAI.data.configured
+                    ? "success"
+                    : "warning"
+                }
+              >
+                {realtimeAI.data?.enabled
+                  ? realtimeAI.data.configured
+                    ? "Настроен"
+                    : "Нет API key"
+                  : "Отключён"}
+              </StatusBadge>
+            </div>
+            {realtimeAI.isError ? (
+              <p role="alert">
+                Не удалось получить безопасный статус Voice AI.
+              </p>
+            ) : (
+              <div className="telephony-status-grid">
+                <span>
+                  Provider<strong>{realtimeAI.data?.provider ?? "—"}</strong>
+                </span>
+                <span>
+                  Model<strong>{realtimeAI.data?.model ?? "—"}</strong>
+                </span>
+                <span>
+                  Voice<strong>{realtimeAI.data?.voice ?? "—"}</strong>
+                </span>
+                <span>
+                  Сессии<strong>{realtimeAI.data?.active_sessions ?? 0}</strong>
+                </span>
+                <span>
+                  Последний статус
+                  <strong>{realtimeAI.data?.last_session_state ?? "—"}</strong>
+                </span>
+                <span>
+                  Live verification
+                  <strong>
+                    {realtimeAI.data?.live_verification ?? "не выполнялась"}
+                  </strong>
+                </span>
+                <span>
+                  TTFA p50
+                  <strong>
+                    {realtimeAI.data?.latency.p50_ms != null
+                      ? `${Math.round(realtimeAI.data.latency.p50_ms)} мс`
+                      : "Недоступно"}
+                  </strong>
+                </span>
+                <span>
+                  TTFA p95
+                  <strong>
+                    {realtimeAI.data?.latency.p95_ms != null
+                      ? `${Math.round(realtimeAI.data.latency.p95_ms)} мс`
+                      : "Недоступно"}
+                  </strong>
+                </span>
+                <span>
+                  TTFA p99
+                  <strong>
+                    {realtimeAI.data?.latency.p99_ms != null
+                      ? `${Math.round(realtimeAI.data.latency.p99_ms)} мс`
+                      : "Недоступно"}
+                  </strong>
+                </span>
+              </div>
+            )}
+            <p>
+              Ключ хранится только на сервере и здесь не отображается. Локальный
+              Mock Realtime подтверждает контракт, но не качество или
+              доступность live-модели.
+            </p>
+            {me.data?.user.role === "tenant_owner" && (
+              <div className="telephony-diagnostic-controls">
+                <Button
+                  disabled={localAiTest.isPending}
+                  onClick={() => localAiTest.mutate()}
+                  type="button"
+                >
+                  {localAiTest.isPending
+                    ? "Проверяем Mock Realtime…"
+                    : "Локальный Voice AI test"}
+                </Button>
+                {localAiTest.error && (
+                  <div className="form-error" role="alert">
+                    {localAiTest.error.message}
+                  </div>
+                )}
+                {aiNotice && (
+                  <div className="compact-note" role="status">
+                    {aiNotice}
+                  </div>
+                )}
+              </div>
+            )}
+            {realtimeAI.data?.last_safe_error && (
+              <div className="form-warning" role="status">
+                Последняя безопасная ошибка: {realtimeAI.data.last_safe_error}
+              </div>
+            )}
+          </article>
+        )}
         {(me.data?.user.role === "tenant_owner" ||
           me.data?.user.role === "tenant_manager") && (
           <article className="panel integration-card telephony-integration-card">
@@ -215,9 +351,9 @@ export function IntegrationsView() {
                     {(localTest.error ?? liveTest.error)?.message}
                   </div>
                 )}
-                {notice && (
+                {telephonyNotice && (
                   <div className="compact-note" role="status">
-                    {notice}
+                    {telephonyNotice}
                   </div>
                 )}
               </div>

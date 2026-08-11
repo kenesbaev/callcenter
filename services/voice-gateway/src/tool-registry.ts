@@ -8,6 +8,25 @@ const reasonSchema = {
 } as const;
 
 export const toolRegistry: Record<ToolName, RealtimeToolDefinition> = {
+  advance_call_flow: {
+    name: "advance_call_flow",
+    description:
+      "Advance only the current pinned Call Flow node using its allowed answer or confirmed action.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["node_id", "expected_state_version"],
+      properties: {
+        node_id: { type: "string", minLength: 36, maxLength: 36 },
+        expected_state_version: { type: "integer", minimum: 1 },
+        answer_key: { type: "string", maxLength: 80 },
+        value: { type: ["string", "number", "boolean", "null"] },
+        confirmed: { type: "boolean" },
+        language: { type: "string", minLength: 2, maxLength: 32 },
+      },
+    },
+    timeoutMs: 5000,
+  },
   search_knowledge: {
     name: "search_knowledge",
     description:
@@ -18,6 +37,96 @@ export const toolRegistry: Record<ToolName, RealtimeToolDefinition> = {
       required: ["query"],
       properties: { query: { type: "string", minLength: 2, maxLength: 1000 } },
     },
+    timeoutMs: 3000,
+  },
+  get_customer: {
+    name: "get_customer",
+    description:
+      "Read the customer attached to the current call. Never request another tenant or customer ID.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    timeoutMs: 3000,
+  },
+  update_customer_field: {
+    name: "update_customer_field",
+    description:
+      "Update one field explicitly allowed by the published call flow, after customer confirmation.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["field_key", "value", "confirmed"],
+      properties: {
+        field_key: { type: "string", minLength: 1, maxLength: 80 },
+        value: { type: ["string", "number", "boolean", "null"] },
+        confirmed: { const: true },
+      },
+    },
+    timeoutMs: 5000,
+  },
+  create_task: {
+    name: "create_task",
+    description:
+      "Create one follow-up task for the current customer after confirmation.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title", "due_at", "confirmed"],
+      properties: {
+        title: { type: "string", minLength: 2, maxLength: 240 },
+        description: { type: "string", maxLength: 2000 },
+        due_at: { type: "string", minLength: 20, maxLength: 40 },
+        confirmed: { const: true },
+      },
+    },
+    timeoutMs: 5000,
+  },
+  create_callback: {
+    name: "create_callback",
+    description:
+      "Create one callback for the current customer after confirmation.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["due_at", "confirmed"],
+      properties: {
+        due_at: { type: "string", minLength: 20, maxLength: 40 },
+        comment: { type: "string", maxLength: 2000 },
+        confirmed: { const: true },
+      },
+    },
+    timeoutMs: 5000,
+  },
+  submit_call_result: {
+    name: "submit_call_result",
+    description:
+      "Submit an allowed project result only at a terminal call-flow node and after confirmation.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["result_code", "confirmed"],
+      properties: {
+        result_code: { type: "string", minLength: 1, maxLength: 80 },
+        comment: { type: "string", maxLength: 2000 },
+        confirmed: { const: true },
+      },
+    },
+    timeoutMs: 5000,
+  },
+  request_human_transfer: {
+    name: "request_human_transfer",
+    description:
+      "Record a request for a human operator. Do not claim that a SIP transfer already happened.",
+    inputSchema: reasonSchema,
+    timeoutMs: 3000,
+  },
+  end_conversation: {
+    name: "end_conversation",
+    description:
+      "Request a graceful end of the current conversation after a terminal call-flow node.",
+    inputSchema: reasonSchema,
     timeoutMs: 3000,
   },
   find_customer: {

@@ -62,4 +62,31 @@ describe("ProviderEventClient", () => {
       client.eventId({ timestamp: "1", type: "StasisStart" }),
     );
   });
+
+  it("retries bounded transient backend failures without changing the command", async () => {
+    const requests: string[] = [];
+    const fetchImplementation = vi.fn(async (_input, init) => {
+      requests.push(String(init?.body ?? ""));
+      if (requests.length < 3)
+        return new Response("temporarily unavailable", { status: 503 });
+      return new Response(JSON.stringify({ accepted: true }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = new ProviderEventClient(
+      "http://api.internal",
+      "local-provider-event-secret-for-tests",
+      1_000,
+      fetchImplementation,
+    );
+
+    await client.publishAiEvent({
+      eventType: "ai.listening",
+      providerEventId: "provider-event-1",
+    });
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    expect(new Set(requests)).toHaveLength(1);
+  });
 });

@@ -10,6 +10,7 @@ import type {
   ProviderEventClient,
 } from "./provider-event-client.js";
 import type { AsteriskAriProvider } from "./providers/asterisk-ari.js";
+import type { VoiceRuntime } from "./voice-runtime.js";
 
 type AriListenerOptions = {
   baseUrl: string;
@@ -52,6 +53,7 @@ export class AsteriskAriListener {
     private readonly options: AriListenerOptions,
     private readonly provider: AsteriskAriProvider,
     private readonly events: ProviderEventClient,
+    private readonly voiceRuntime?: VoiceRuntime,
   ) {}
 
   start(): void {
@@ -242,7 +244,19 @@ export class AsteriskAriListener {
     this.bridgeByCall.set(context.callId, bridgeId);
     await this.provider.createBridge(bridgeId);
     await this.provider.addChannelToBridge(bridgeId, channelId);
-    const media = await this.provider.createExternalMedia(context);
+    const aiExternalHost =
+      accepted.aiSessionAvailable && this.voiceRuntime
+        ? await this.voiceRuntime.reserve(context)
+        : undefined;
+    let media;
+    try {
+      media = await this.provider.createExternalMedia(context, aiExternalHost);
+    } catch (error) {
+      if (aiExternalHost) {
+        await this.voiceRuntime?.stop(context.callId, "external_media_failed");
+      }
+      throw error;
+    }
     const mediaId = String(media.safeMetadata.mediaId ?? "");
     if (mediaId) {
       this.mediaByCall.set(context.callId, mediaId);
@@ -252,6 +266,35 @@ export class AsteriskAriListener {
     await this.publish(context, event, "bridge.created", { bridgeId });
     await this.provider.answer(context);
     await this.publish(context, event, "call.answered", { channelState: "Up" });
+    if (accepted.aiSessionAvailable && this.voiceRuntime) {
+      try {
+        await this.voiceRuntime.start(context);
+      } catch (error) {
+        logger.warn(
+          {
+            callId: context.callId,
+            code: error instanceof Error ? error.name : "ai_session_error",
+          },
+          "AI voice session failed to start",
+        );
+        await this.publish(context, event, "call.failed", {
+          rawCause: "ai_session_unavailable",
+        });
+      }
+    } else if (accepted.aiSessionAvailable) {
+      await this.provider
+        .request(
+          `/channels/${encodeURIComponent(channelId)}/play?media=${encodeURIComponent("sound:vm-sorry")}`,
+          { method: "POST" },
+        )
+        .catch(() => undefined);
+      await this.publish(context, event, "call.failed", {
+        rawCause: "ai_provider_not_configured",
+      });
+      await this.provider
+        .hangup(context, "provider_error")
+        .catch(() => undefined);
+    }
     if (accepted.recordingAllowed && !accepted.disclosureRequired) {
       await this.provider.startRecording(context);
       this.recordingCalls.add(context.callId);
@@ -264,6 +307,7 @@ export class AsteriskAriListener {
   ): Promise<void> {
     const bridgeId = this.bridgeByCall.get(context.callId);
     const mediaId = this.mediaByCall.get(context.callId);
+    await this.voiceRuntime?.stop(context.callId, "telephony_cleanup");
     if (mediaId) {
       await this.provider
         .request(`/channels/${encodeURIComponent(mediaId)}`, {

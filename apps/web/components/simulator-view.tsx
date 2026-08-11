@@ -7,6 +7,7 @@ import type { FormEvent } from "react";
 import { Button, StatusBadge } from "@teamora/ui";
 import { ApiClientError, apiRequest, idempotencyKey } from "@/lib/api";
 import type {
+  AIRealtimeDiagnostic,
   AiOperator,
   CallDetail,
   Page,
@@ -47,6 +48,7 @@ export function SimulatorView() {
     SimulatorMessage["tool_result"] | null
   >(null);
   const [error, setError] = useState("");
+  const [voiceNotice, setVoiceNotice] = useState("");
   const operators = useQuery({
     queryKey: ["operators"],
     queryFn: () => apiRequest<Page<AiOperator>>("/ai-operators"),
@@ -120,6 +122,19 @@ export function SimulatorView() {
     },
     onError: handleError,
   });
+  const voiceFixture = useMutation({
+    mutationFn: () =>
+      apiRequest<AIRealtimeDiagnostic>("/ai-realtime/diagnostics/local", {
+        method: "POST",
+      }),
+    onSuccess: (result) =>
+      setVoiceNotice(
+        result.status === "local_mock_passed"
+          ? "Локальный voice fixture прошёл: VAD, audio, transcript и usage. Live OpenAI не проверялся."
+          : `Voice fixture: ${result.status}`,
+      ),
+    onError: handleError,
+  });
 
   function handleError(caught: unknown) {
     setError(
@@ -145,6 +160,24 @@ export function SimulatorView() {
       <div className="simulation-banner">
         <AlertTriangle aria-hidden="true" size={18} />
         <span>Симуляция — это не настоящий телефонный звонок.</span>
+      </div>
+      <div className="compact-note voice-test-note">
+        <div>
+          <strong>Voice test mode</strong>
+          <span>
+            Детерминированный локальный media fixture; не выполняет OpenAI API
+            запрос и не расходует бюджет.
+          </span>
+        </div>
+        <Button
+          disabled={voiceFixture.isPending}
+          onClick={() => voiceFixture.mutate()}
+          type="button"
+          variant="secondary"
+        >
+          {voiceFixture.isPending ? "Проверяем…" : "Проверить voice fixture"}
+        </Button>
+        {voiceNotice && <span role="status">{voiceNotice}</span>}
       </div>
       <div className="simulator-layout">
         <section className="form-card">

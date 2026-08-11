@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal, cast
 from uuid import UUID
 
 from sqlalchemy import and_, func, select
@@ -32,12 +33,13 @@ DIALER_ROLES = {
     RoleName.TENANT_MANAGER,
     RoleName.HUMAN_OPERATOR,
 }
+EffectiveOperatorStatus = Literal["available", "away", "on_break", "offline", "busy", "on_hold"]
 
 
 @dataclass(frozen=True)
 class OperatorState:
     manual_status: QueueStatus
-    effective_status: str
+    effective_status: EffectiveOperatorStatus
     last_heartbeat_at: datetime | None
     current_call_id: UUID | None
 
@@ -162,7 +164,7 @@ async def get_operator_state(
         .limit(1)
     )
     if active_call is not None:
-        effective = "on_hold" if active_call.status == CallStatus.ON_HOLD else "busy"
+        effective: EffectiveOperatorStatus = "on_hold" if active_call.status == CallStatus.ON_HOLD else "busy"
         return OperatorState(manual, effective, membership.presence_last_seen_at, active_call.id)
 
     cutoff = current_time - timedelta(seconds=PRESENCE_TTL_SECONDS)
@@ -177,7 +179,7 @@ async def get_operator_state(
     if not membership.is_active or last_heartbeat is None or manual == QueueStatus.OFFLINE:
         effective = "offline"
     else:
-        effective = manual.value
+        effective = cast(EffectiveOperatorStatus, manual.value)
     return OperatorState(manual, effective, last_heartbeat, None)
 
 

@@ -48,6 +48,9 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         "/api/v1/webhooks/openai",
         "/api/v1/webhooks/telephony",
         "/api/v1/webhooks/telephony/inbound",
+        "/api/v1/webhooks/ai-realtime/session",
+        "/api/v1/webhooks/ai-realtime/events",
+        "/api/v1/webhooks/ai-realtime/tools",
     }
 
     async def dispatch(
@@ -82,20 +85,36 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 class LocalRateLimitMiddleware(BaseHTTPMiddleware):
     """Single-process development guard; production deployment must use the Redis limiter."""
 
+    SERVICE_PATHS = {
+        "/api/v1/webhooks/telephony",
+        "/api/v1/webhooks/telephony/inbound",
+        "/api/v1/webhooks/ai-realtime/session",
+        "/api/v1/webhooks/ai-realtime/events",
+        "/api/v1/webhooks/ai-realtime/tools",
+    }
+
     def __init__(self, app: object, settings: Settings) -> None:
         super().__init__(app)  # type: ignore[arg-type]
         self.limit = settings.rate_limit_requests_per_minute
+        self.service_limit = settings.service_rate_limit_requests_per_minute
         self.buckets: dict[str, deque[float]] = defaultdict(deque)
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         client = request.client.host if request.client else "unknown"
-        bucket = self.buckets[client]
+        is_signed_service_request = (
+            request.url.path in self.SERVICE_PATHS
+            and bool(request.headers.get("x-teamora-id"))
+            and bool(request.headers.get("x-teamora-signature"))
+        )
+        bucket_key = f"service:{client}" if is_signed_service_request else f"user:{client}"
+        limit = self.service_limit if is_signed_service_request else self.limit
+        bucket = self.buckets[bucket_key]
         cutoff = time.monotonic() - 60
         while bucket and bucket[0] < cutoff:
             bucket.popleft()
-        if len(bucket) >= self.limit:
+        if len(bucket) >= limit:
             body = ErrorEnvelope(
                 error=ErrorBody(
                     code="rate_limited",

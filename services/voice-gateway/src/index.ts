@@ -5,9 +5,13 @@ import { registry } from "./metrics.js";
 import { createGatewayRequestHandler } from "./internal-api.js";
 import { AsteriskAriProvider } from "./providers/asterisk-ari.js";
 import { OpenAiRealtimeProvider } from "./providers/openai-realtime.js";
+import { MockRealtimeProvider } from "./providers/mock-realtime.js";
 import { AsteriskAriListener } from "./ari-listener.js";
 import { ProviderEventClient } from "./provider-event-client.js";
 import { RtpDiagnosticAdapter } from "./rtp-diagnostic.js";
+import { RtpMediaPool } from "./rtp-media-pool.js";
+import { VoiceRuntime } from "./voice-runtime.js";
+import { runLocalAiDiagnostic } from "./local-ai-diagnostic.js";
 
 const parsed = gatewayEnvironmentSchema.safeParse(process.env);
 if (!parsed.success) {
@@ -23,9 +27,19 @@ if (!parsed.success) {
   process.exit(1);
 }
 const config = parsed.data;
-const realtimeProvider = config.OPENAI_API_KEY
-  ? new OpenAiRealtimeProvider({ apiKey: config.OPENAI_API_KEY })
-  : undefined;
+const realtimeProvider = !config.OPENAI_REALTIME_ENABLED
+  ? undefined
+  : config.OPENAI_REALTIME_PROVIDER === "mock"
+    ? new MockRealtimeProvider()
+    : new OpenAiRealtimeProvider({
+        apiKey: config.OPENAI_API_KEY!,
+        ...(config.OPENAI_REALTIME_URL
+          ? { url: config.OPENAI_REALTIME_URL }
+          : {}),
+        connectTimeoutMs: config.OPENAI_REALTIME_CONNECT_TIMEOUT_MS,
+        maxMessageBytes: config.OPENAI_REALTIME_MAX_MESSAGE_BYTES,
+        maxQueueBytes: config.OPENAI_REALTIME_MAX_QUEUE_BYTES,
+      });
 const telephonyProvider =
   config.ASTERISK_ARI_URL &&
   config.ASTERISK_ARI_USERNAME &&
@@ -49,6 +63,19 @@ const mediaAdapter = telephonyProvider
     )
   : undefined;
 await mediaAdapter?.start();
+const advertisedMediaHost = config.ASTERISK_EXTERNAL_MEDIA_HOST?.replace(
+  /:\d+$/,
+  "",
+);
+const mediaPool =
+  telephonyProvider && advertisedMediaHost
+    ? new RtpMediaPool(
+        config.ASTERISK_RTP_BIND_HOST,
+        advertisedMediaHost,
+        config.ASTERISK_RTP_PORT_START + 1,
+        config.ASTERISK_RTP_PORT_END,
+      )
+    : undefined;
 const providerEventClient = telephonyProvider
   ? new ProviderEventClient(
       config.API_INTERNAL_URL,
@@ -56,6 +83,14 @@ const providerEventClient = telephonyProvider
       config.ASTERISK_ARI_TIMEOUT_MS,
     )
   : undefined;
+const voiceRuntime =
+  realtimeProvider && providerEventClient && mediaPool
+    ? new VoiceRuntime(
+        new Map([[config.OPENAI_REALTIME_PROVIDER, realtimeProvider]]),
+        providerEventClient,
+        mediaPool,
+      )
+    : undefined;
 const ariListener =
   telephonyProvider && providerEventClient
     ? new AsteriskAriListener(
@@ -69,6 +104,7 @@ const ariListener =
         },
         telephonyProvider,
         providerEventClient,
+        voiceRuntime,
       )
     : undefined;
 ariListener?.start();
@@ -80,6 +116,7 @@ const handleInternalRequest = createGatewayRequestHandler({
   maxBodyBytes: config.GATEWAY_MAX_BODY_BYTES,
   ...(telephonyProvider ? { provider: telephonyProvider } : {}),
   ...(mediaAdapter ? { mediaAdapter } : {}),
+  runRealtimeDiagnostic: runLocalAiDiagnostic,
 });
 let shuttingDown = false;
 
@@ -103,8 +140,11 @@ const server = createServer(async (request, response) => {
       JSON.stringify({
         status: shuttingDown ? "stopping" : "ready",
         openai_realtime: realtimeProvider
-          ? "configured_not_end_to_end_verified"
+          ? config.OPENAI_REALTIME_PROVIDER === "mock"
+            ? "mock_local_verification_available"
+            : "configured_live_verification_required"
           : "unavailable",
+        ai_session: voiceRuntime?.status() ?? "unavailable",
         asterisk: telephonyProvider
           ? "configured_live_verification_required"
           : "unavailable",
@@ -150,6 +190,7 @@ async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, "graceful shutdown started");
   server.close();
   await ariListener?.stop();
+  await voiceRuntime?.shutdown("gateway_shutdown");
   await mediaAdapter?.stop();
   await realtimeProvider?.shutdown();
   logger.info("graceful shutdown complete");

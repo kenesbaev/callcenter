@@ -77,6 +77,38 @@ beforeEach(() => {
         live_signaling_verified: false,
         live_audio_verified: false,
       });
+    if (path === "/ai-realtime/status")
+      return Promise.resolve({
+        configured: false,
+        enabled: false,
+        provider: "mock",
+        model: "gpt-realtime-2.1",
+        voice: "marin",
+        live_verification: "live_openai_verification_required",
+        last_session_state: null,
+        last_safe_error: null,
+        active_sessions: 0,
+        latency: {
+          metric: "first_audio_latency_ms",
+          samples: 3,
+          p50_ms: 210,
+          p95_ms: 330,
+          p99_ms: 350,
+          is_available: true,
+        },
+      });
+    if (path === "/ai-realtime/diagnostics/local" && init?.method === "POST")
+      return Promise.resolve({
+        status: "local_mock_passed",
+        provider: "mock-realtime",
+        inputBytes: 4800,
+        outputBytes: 4800,
+        eventTypes: 8,
+        vadVerified: true,
+        transcriptVerified: true,
+        usageVerified: true,
+        liveOpenAiVerified: false,
+      });
     if (path === "/telephony/diagnostics/local" && init?.method === "POST")
       return Promise.resolve({
         id: "diagnostic-id",
@@ -103,11 +135,15 @@ describe("Integrations telephony status", () => {
     expect(
       await screen.findByRole("heading", { name: /SIP \/ Asterisk/ }),
     ).toBeInTheDocument();
+    expect(await screen.findByText("210 мс")).toBeInTheDocument();
     expect((await screen.findAllByText("configured")).length).toBeGreaterThan(
       0,
     );
     expect(screen.getByText("1/4")).toBeInTheDocument();
     expect(screen.queryByText(/password|secret/i)).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "OpenAI Realtime Voice AI" }),
+    ).toBeInTheDocument();
 
     const localButton = await screen.findByRole("button", {
       name: /media test/i,
@@ -120,6 +156,20 @@ describe("Integrations telephony status", () => {
         expect.objectContaining({ method: "POST" }),
       ),
     );
-    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Локальный RTP-тест подтверждён в обоих направлениях.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Локальный Voice AI test/i }),
+    );
+    await waitFor(() =>
+      expect(apiRequestMock).toHaveBeenCalledWith(
+        "/ai-realtime/diagnostics/local",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
   });
 });

@@ -59,6 +59,16 @@ const queryGroups: Array<{ prefix: string; keys: string[][] }> = [
   { prefix: "team.", keys: [["team"], ["auth"]] },
   { prefix: "knowledge.", keys: [["knowledge"]] },
   {
+    prefix: "ai.",
+    keys: [
+      ["ai-realtime"],
+      ["calls"],
+      ["live-calls"],
+      ["conversations"],
+      ["integrations"],
+    ],
+  },
+  {
     prefix: "job.",
     keys: [["background-jobs"], ["customer-imports"], ["knowledge"]],
   },
@@ -136,6 +146,7 @@ export function RealtimeProvider({
       ["analytics"],
       ["conversations"],
       ["knowledge"],
+      ["ai-realtime"],
       ["background-jobs"],
       ["customer-imports"],
       ["storage"],

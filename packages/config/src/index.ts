@@ -12,6 +12,12 @@ const optionalUrl = z.preprocess(
   (value) => (value === "" ? undefined : value),
   z.url().optional(),
 );
+const commaSeparated = z.string().transform((value) =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean),
+);
 
 export const gatewayEnvironmentSchema = z
   .object({
@@ -30,8 +36,59 @@ export const gatewayEnvironmentSchema = z
       (value) => (value === "" ? undefined : value),
       z.string().min(20).optional(),
     ),
-    OPENAI_REALTIME_MODEL: z.string().min(1).default("gpt-realtime-2.1-mini"),
+    OPENAI_REALTIME_ENABLED: booleanFromString,
+    OPENAI_REALTIME_PROVIDER: z.enum(["mock", "openai"]).default("mock"),
+    OPENAI_REALTIME_URL: optionalUrl,
+    OPENAI_REALTIME_MODEL: z.string().min(1).default("gpt-realtime-2.1"),
+    OPENAI_REALTIME_MODEL_ALLOWLIST: commaSeparated.default([
+      "gpt-realtime-2.1",
+      "gpt-realtime-2",
+      "gpt-realtime-1.5",
+    ]),
     OPENAI_REALTIME_VOICE: z.string().min(1).default("marin"),
+    OPENAI_REALTIME_REASONING_EFFORT: z
+      .enum(["none", "low", "medium", "high"])
+      .default("none"),
+    OPENAI_REALTIME_CONNECT_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(500)
+      .max(30_000)
+      .default(10_000),
+    OPENAI_REALTIME_MAX_MESSAGE_BYTES: z.coerce
+      .number()
+      .int()
+      .min(16_384)
+      .max(4_194_304)
+      .default(1_048_576),
+    OPENAI_REALTIME_MAX_QUEUE_BYTES: z.coerce
+      .number()
+      .int()
+      .min(65_536)
+      .max(16_777_216)
+      .default(4_194_304),
+    OPENAI_REALTIME_VAD_TYPE: z
+      .enum(["server_vad", "semantic_vad"])
+      .default("server_vad"),
+    OPENAI_REALTIME_VAD_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+    OPENAI_REALTIME_PREFIX_PADDING_MS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(5_000)
+      .default(300),
+    OPENAI_REALTIME_SILENCE_DURATION_MS: z.coerce
+      .number()
+      .int()
+      .min(200)
+      .max(5_000)
+      .default(700),
+    OPENAI_REALTIME_IDLE_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(5_000)
+      .max(120_000)
+      .default(30_000),
     ASTERISK_ARI_URL: optionalUrl,
     ASTERISK_ARI_USERNAME: optionalNonEmptyString,
     ASTERISK_ARI_PASSWORD: optionalNonEmptyString,
@@ -87,12 +144,40 @@ export const gatewayEnvironmentSchema = z
     GATEWAY_MAX_ACTIVE_CALLS: z.coerce.number().int().min(1).default(100),
   })
   .superRefine((value, context) => {
-    if (value.APP_ENV === "production" && !value.OPENAI_API_KEY) {
+    if (
+      value.OPENAI_REALTIME_ENABLED &&
+      !value.OPENAI_REALTIME_MODEL_ALLOWLIST.includes(
+        value.OPENAI_REALTIME_MODEL,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["OPENAI_REALTIME_MODEL"],
+        message:
+          "OPENAI_REALTIME_MODEL must be present in OPENAI_REALTIME_MODEL_ALLOWLIST",
+      });
+    }
+    if (
+      value.OPENAI_REALTIME_ENABLED &&
+      value.OPENAI_REALTIME_PROVIDER === "openai" &&
+      !value.OPENAI_API_KEY
+    ) {
       context.addIssue({
         code: "custom",
         path: ["OPENAI_API_KEY"],
         message:
-          "OPENAI_API_KEY is required when the OpenAI adapter is enabled in production",
+          "OPENAI_API_KEY is required when the OpenAI Realtime provider is enabled",
+      });
+    }
+    if (
+      value.APP_ENV === "production" &&
+      value.OPENAI_REALTIME_PROVIDER === "mock" &&
+      value.OPENAI_REALTIME_ENABLED
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["OPENAI_REALTIME_PROVIDER"],
+        message: "Mock Realtime provider cannot be enabled in production",
       });
     }
     if (value.ASTERISK_RTP_PORT_START > value.ASTERISK_RTP_PORT_END) {
@@ -101,6 +186,18 @@ export const gatewayEnvironmentSchema = z
         path: ["ASTERISK_RTP_PORT_END"],
         message:
           "ASTERISK_RTP_PORT_END must be greater than or equal to ASTERISK_RTP_PORT_START",
+      });
+    }
+    if (
+      value.OPENAI_REALTIME_ENABLED &&
+      value.ASTERISK_ARI_URL &&
+      value.ASTERISK_RTP_PORT_END <= value.ASTERISK_RTP_PORT_START
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["ASTERISK_RTP_PORT_END"],
+        message:
+          "Voice AI requires at least one RTP port in addition to the diagnostic port",
       });
     }
   });

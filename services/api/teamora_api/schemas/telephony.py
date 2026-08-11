@@ -83,6 +83,7 @@ class InboundTelephonyAccepted(BaseModel):
     state_version: int = Field(alias="stateVersion")
     recording_allowed: bool = Field(alias="recordingAllowed")
     disclosure_required: bool = Field(alias="disclosureRequired")
+    ai_session_available: bool = Field(default=False, alias="aiSessionAvailable")
     duplicate: bool = False
 
 

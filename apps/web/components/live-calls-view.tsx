@@ -5,7 +5,7 @@ import { Radio } from "lucide-react";
 import Link from "next/link";
 import { StatusBadge } from "@teamora/ui";
 import { apiRequest } from "@/lib/api";
-import type { Call } from "@/lib/types";
+import type { AIRealtimeSession, Call } from "@/lib/types";
 import { QueryError, SectionSkeleton } from "@/components/query-state";
 import { useRealtime } from "@/components/realtime-provider";
 
@@ -23,6 +23,15 @@ export function LiveCallsView() {
     queryFn: () => apiRequest<Call[]>("/live-calls"),
     refetchInterval: realtime.connected ? 60_000 : 15_000,
   });
+  const aiSessions = useQuery({
+    queryKey: ["ai-realtime", "active"],
+    queryFn: () =>
+      apiRequest<AIRealtimeSession[]>("/ai-realtime/sessions/active"),
+    refetchInterval: realtime.connected ? 60_000 : 15_000,
+  });
+  const aiByCall = new Map(
+    (aiSessions.data ?? []).map((session) => [session.call_id, session]),
+  );
 
   if (calls.isPending) return <SectionSkeleton />;
   if (calls.isError)
@@ -69,31 +78,62 @@ export function LiveCallsView() {
                   <th>Канал</th>
                   <th>Язык</th>
                   <th>Статус</th>
+                  <th>Voice AI</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {calls.data.map((call) => (
-                  <tr key={call.id}>
-                    <td>
-                      <strong>{call.id.slice(0, 8)}</strong>
-                    </td>
-                    <td>{call.channel === "sip" ? "SIP" : "Симулятор"}</td>
-                    <td>{languageLabel[call.language ?? ""] ?? "—"}</td>
-                    <td>
-                      <StatusBadge
-                        tone={call.status === "active" ? "success" : "warning"}
-                      >
-                        {call.status === "active" ? "В разговоре" : "Перевод"}
-                      </StatusBadge>
-                    </td>
-                    <td>
-                      <Link href={`/app/conversations/${call.id}`}>
-                        Открыть
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                {calls.data.map((call) => {
+                  const ai = aiByCall.get(call.id);
+                  return (
+                    <tr key={call.id}>
+                      <td>
+                        <strong>{call.id.slice(0, 8)}</strong>
+                      </td>
+                      <td>{call.channel === "sip" ? "SIP" : "Симулятор"}</td>
+                      <td>{languageLabel[call.language ?? ""] ?? "—"}</td>
+                      <td>
+                        <StatusBadge
+                          tone={
+                            call.status === "active" ? "success" : "warning"
+                          }
+                        >
+                          {call.status === "active" ? "В разговоре" : "Перевод"}
+                        </StatusBadge>
+                      </td>
+                      <td>
+                        {ai ? (
+                          <div className="ai-call-state">
+                            <StatusBadge
+                              tone={
+                                ai.state === "degraded" ? "warning" : "primary"
+                              }
+                            >
+                              {ai.state === "active"
+                                ? "слушает / говорит"
+                                : ai.state}
+                            </StatusBadge>
+                            <small>
+                              {ai.language_code.toUpperCase()} · {ai.model} ·
+                              прерываний {ai.interruption_count}
+                              {typeof ai.latency.first_audio_latency_ms ===
+                              "number"
+                                ? ` · TTFA ${Math.round(ai.latency.first_audio_latency_ms)} мс`
+                                : ""}
+                            </small>
+                          </div>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>
+                        <Link href={`/app/conversations/${call.id}`}>
+                          Открыть
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

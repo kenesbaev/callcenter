@@ -594,7 +594,10 @@ class AiOperator(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 
 class AiOperatorVersion(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "ai_operator_versions"
-    __table_args__ = (UniqueConstraint("ai_operator_id", "version"),)
+    __table_args__ = (
+        UniqueConstraint("ai_operator_id", "version"),
+        UniqueConstraint("tenant_id", "id", name="uq_ai_operator_versions_tenant_id"),
+    )
 
     ai_operator_id: Mapped[UUID] = mapped_column(
         ForeignKey("ai_operators.id", ondelete="CASCADE"), index=True
@@ -2052,6 +2055,123 @@ class Call(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     )
 
 
+class AIRealtimeSession(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "ai_realtime_sessions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_ai_realtime_sessions_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_ai_realtime_sessions_tenant_call",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "call_flow_version_id"],
+            [
+                "call_flow_versions.tenant_id",
+                "call_flow_versions.project_id",
+                "call_flow_versions.id",
+            ],
+            name="fk_ai_realtime_sessions_tenant_flow_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "knowledge_base_revision_id"],
+            [
+                "knowledge_base_revisions.tenant_id",
+                "knowledge_base_revisions.project_id",
+                "knowledge_base_revisions.id",
+            ],
+            name="fk_ai_realtime_sessions_tenant_knowledge_revision",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "ai_operator_version_id"],
+            ["ai_operator_versions.tenant_id", "ai_operator_versions.id"],
+            name="fk_ai_realtime_sessions_tenant_operator_version",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_ai_realtime_sessions_tenant_id"),
+        UniqueConstraint("tenant_id", "call_id", name="uq_ai_realtime_sessions_tenant_call"),
+        CheckConstraint(
+            "state IN ('pending','connecting','active','reconnecting','degraded',"
+            "'closing','closed','failed')",
+            name="ai_realtime_session_state_valid",
+        ),
+        CheckConstraint("state_version >= 1", name="ai_realtime_session_version_positive"),
+        CheckConstraint("interruption_count >= 0", name="ai_realtime_session_interruptions_non_negative"),
+        Index(
+            "ix_ai_realtime_sessions_tenant_project_state",
+            "tenant_id",
+            "project_id",
+            "state",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID] = mapped_column(index=True)
+    ai_operator_version_id: Mapped[UUID] = mapped_column(index=True)
+    call_flow_version_id: Mapped[UUID | None] = mapped_column(index=True)
+    knowledge_base_revision_id: Mapped[UUID | None] = mapped_column(index=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    voice: Mapped[str] = mapped_column(String(80), nullable=False)
+    language_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), default="pending", nullable=False, index=True)
+    state_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    provider_session_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    enabled_tools: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    recording_allowed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    disclosure_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    disclosure_played_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_event_type: Mapped[str | None] = mapped_column(String(80))
+    last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    usage_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    latency_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    interruption_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(160), nullable=False)
+
+
+class AIRealtimeSessionEvent(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "ai_realtime_session_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["ai_realtime_sessions.tenant_id", "ai_realtime_sessions.id"],
+            name="fk_ai_realtime_events_tenant_session",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_ai_realtime_events_tenant_call",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "provider_event_id", name="uq_ai_realtime_events_provider_event"),
+        Index("ix_ai_realtime_events_session_occurred", "tenant_id", "session_id", "occurred_at"),
+        Index("ix_ai_realtime_events_call_type", "tenant_id", "call_id", "event_type"),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    session_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID] = mapped_column(index=True)
+    provider_event_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    aggregate_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    safe_payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    correlation_id: Mapped[str] = mapped_column(String(160), nullable=False)
+
+
 class CallFlowExecution(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "call_flow_executions"
     __table_args__ = (
@@ -2452,10 +2572,14 @@ class TranscriptSegment(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     speaker: Mapped[TranscriptSpeaker] = mapped_column(enum_type(TranscriptSpeaker), nullable=False)
     language: Mapped[LanguageCode] = mapped_column(enum_type(LanguageCode), nullable=False)
+    language_code: Mapped[str] = mapped_column(String(32), default="ru", nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
     started_ms: Mapped[int | None] = mapped_column(Integer)
     ended_ms: Mapped[int | None] = mapped_column(Integer)
+    provider_item_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    is_final: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    interrupted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     retention_redacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
     __table_args__ = (
@@ -3012,6 +3136,11 @@ class UsageRecord(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     estimated_cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), default=Decimal("0"))
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(40), index=True)
+    model: Mapped[str | None] = mapped_column(String(120))
+    provider_session_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    safe_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    pricing_available: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class UsageLimit(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

@@ -39,6 +39,9 @@ export type GatewayInternalApiOptions = {
   maxBodyBytes: number;
   provider?: TelephonyProvider;
   mediaAdapter?: RtpDiagnosticAdapter;
+  runRealtimeDiagnostic?: () => Promise<
+    Record<string, string | number | boolean>
+  >;
 };
 
 type CachedCommand = {
@@ -59,7 +62,8 @@ export function createGatewayRequestHandler(
     const isCommand = path === "/internal/v1/telephony/commands";
     const isLocalMediaTest =
       path === "/internal/v1/telephony/diagnostics/local-media";
-    if (!isCommand && !isLocalMediaTest) return false;
+    const isRealtimeTest = path === "/internal/v1/ai/diagnostics/local";
+    if (!isCommand && !isLocalMediaTest && !isRealtimeTest) return false;
     if (request.method !== "POST") {
       json(response, 405, error("method_not_allowed", "POST is required"));
       return true;
@@ -162,6 +166,39 @@ export function createGatewayRequestHandler(
           response,
           409,
           error("rtp_diagnostic_failed", "Local RTP diagnostic failed"),
+        );
+      }
+      return true;
+    }
+    if (isRealtimeTest) {
+      if (!options.runRealtimeDiagnostic) {
+        json(
+          response,
+          503,
+          error(
+            "ai_diagnostic_unavailable",
+            "Local AI diagnostic is unavailable",
+          ),
+        );
+        return true;
+      }
+      try {
+        json(response, 200, await options.runRealtimeDiagnostic());
+      } catch (diagnosticError) {
+        logger.warn(
+          {
+            correlationId,
+            code:
+              diagnosticError instanceof Error
+                ? diagnosticError.name
+                : "ai_diagnostic_error",
+          },
+          "local AI Realtime diagnostic failed",
+        );
+        json(
+          response,
+          409,
+          error("ai_diagnostic_failed", "Local AI Realtime diagnostic failed"),
         );
       }
       return true;

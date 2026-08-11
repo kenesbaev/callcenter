@@ -259,6 +259,30 @@ services:
     networks:
       - voice
 
+  mock-openai-realtime:
+    <<: *service-defaults
+    profiles: ["ai-test"]
+    build:
+      context: .
+      dockerfile: services/voice-gateway/Dockerfile
+    command: ["node", "services/voice-gateway/dist/mock-openai-server.js"]
+    environment:
+      MOCK_OPENAI_PORT: 8790
+      MOCK_OPENAI_TOKEN: local-test-token-not-a-secret
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8790/health').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - voice
+
   mailpit:
     <<: *service-defaults
     profiles: ["dev-tools"]

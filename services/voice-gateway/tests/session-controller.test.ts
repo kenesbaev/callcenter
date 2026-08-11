@@ -94,11 +94,65 @@ describe("VoiceSessionController", () => {
     const { controller, provider, emit } = setup();
     await controller.start();
     expect(controller.state).toBe("active");
-    await controller.customerSpeechStarted();
+    await provider.handler?.({
+      type: "audio.output",
+      audioBase64: Buffer.alloc(480).toString("base64"),
+      itemId: "item-1",
+      eventId: "audio-1",
+    });
+    await provider.handler?.({
+      type: "speech.started",
+      audioStartMs: 100,
+      eventId: "speech-1",
+    });
     expect(provider.session.interrupt).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "audio.barge_in", tenantId: "tenant-1" }),
+      expect.objectContaining({ type: "ai.interrupted", tenantId: "tenant-1" }),
     );
+  });
+
+  it("measures time from speech stop to the first emitted audio frame", async () => {
+    vi.useFakeTimers();
+    try {
+      const { controller, provider, emit } = setup();
+      await controller.start();
+      vi.setSystemTime(1_000);
+      await provider.handler?.({
+        type: "speech.stopped",
+        audioEndMs: 500,
+        eventId: "speech-stopped",
+      });
+      vi.setSystemTime(1_100);
+      await provider.handler?.({
+        type: "response.started",
+        responseId: "response-1",
+        eventId: "response-started",
+      });
+      vi.setSystemTime(1_240);
+      await provider.handler?.({
+        type: "audio.output",
+        audioBase64: Buffer.alloc(480).toString("base64"),
+        itemId: "item-1",
+        eventId: "audio-1",
+      });
+      vi.setSystemTime(1_500);
+      await provider.handler?.({
+        type: "response.completed",
+        responseId: "response-1",
+        eventId: "response-completed",
+      });
+      expect(emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "ai.response_completed",
+          safeData: expect.objectContaining({
+            first_audio_latency_ms: 240,
+            total_latency_ms: 400,
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reconnects boundedly after a transient connect error", async () => {
@@ -109,7 +163,7 @@ describe("VoiceSessionController", () => {
     expect(controller.state).toBe("active");
     expect(provider.attempts).toBe(2);
     expect(emit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.reconnect" }),
+      expect.objectContaining({ type: "ai.session_degraded" }),
     );
   });
 
@@ -122,21 +176,18 @@ describe("VoiceSessionController", () => {
     expect(provider.attempts).toBe(3);
   });
 
-  it("closes realtime before transferring to a human queue", async () => {
-    const { controller, provider, telephony } = setup();
+  it("records a transfer request without executing live telephony", async () => {
+    const { controller, provider, telephony, emit } = setup();
     await controller.start();
     await controller.transfer("support", "explicit_request");
-    expect(provider.session.close).toHaveBeenCalledWith("human_transfer");
-    expect(telephony.transfer).toHaveBeenCalledWith(
+    expect(provider.session.close).not.toHaveBeenCalled();
+    expect(telephony.transfer).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({
-        tenantId: "tenant-1",
-        projectId: "project-1",
-        callId: "call-1",
-        providerCallId: "channel-1",
+        type: "transfer.requested",
+        safeData: { reason: "explicit_request" },
       }),
-      "support",
-      "explicit_request",
     );
-    expect(controller.state).toBe("transferring");
+    expect(controller.state).toBe("active");
   });
 });

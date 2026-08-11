@@ -18,6 +18,7 @@ WORKDIR /workspace
 COPY --from=build /workspace/node_modules ./node_modules
 COPY --from=build /workspace/packages ./packages
 COPY --from=build /workspace/services/voice-gateway/package.json ./services/voice-gateway/package.json
+COPY --from=build /workspace/services/voice-gateway/node_modules ./services/voice-gateway/node_modules
 COPY --from=build /workspace/services/voice-gateway/dist ./services/voice-gateway/dist
 USER node
 CMD ["node", "services/voice-gateway/dist/index.js"]

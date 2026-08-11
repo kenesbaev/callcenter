@@ -84,6 +84,22 @@ BACKGROUND_EVENT_TYPES = frozenset(
         "storage.issue_detected",
     }
 )
+AI_EVENT_TYPES = frozenset(
+    {
+        "ai.session_connecting",
+        "ai.session_started",
+        "ai.listening",
+        "ai.speaking",
+        "ai.interrupted",
+        "ai.tool_started",
+        "ai.tool_completed",
+        "ai.session_degraded",
+        "ai.session_failed",
+        "ai.session_closed",
+        "ai.transcript_updated",
+        "ai.usage_updated",
+    }
+)
 REALTIME_EVENT_TYPES = (
     CALL_EVENT_TYPES
     | TRANSFER_EVENT_TYPES
@@ -93,6 +109,7 @@ REALTIME_EVENT_TYPES = (
     | ANALYTICS_EVENT_TYPES
     | KNOWLEDGE_EVENT_TYPES
     | BACKGROUND_EVENT_TYPES
+    | AI_EVENT_TYPES
 )
 
 _SENSITIVE_PAYLOAD_KEYS = frozenset(

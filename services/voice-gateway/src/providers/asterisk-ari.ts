@@ -177,13 +177,14 @@ export class AsteriskAriProvider implements TelephonyProvider {
 
   async createExternalMedia(
     context: TelephonyCommandContext,
+    externalHost = this.options.externalHost,
   ): Promise<TelephonyCommandResult> {
     const mediaId = `teamora-media-${context.callId}`;
     const transport = this.options.transport ?? "websocket";
     const query = new URLSearchParams({
       app: this.options.application ?? "teamora-voice",
       channelId: mediaId,
-      external_host: this.options.externalHost,
+      external_host: externalHost,
       format: this.options.mediaFormat ?? "ulaw",
       transport,
       encapsulation: transport === "udp" ? "rtp" : "none",

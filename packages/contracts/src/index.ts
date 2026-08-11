@@ -1,4 +1,4 @@
-export type LanguageCode = "ru" | "en" | "uz" | "kaa";
+export type LanguageCode = string;
 export type LanguageReadiness = "production" | "beta" | "experimental";
 export type ProviderStatus =
   "unavailable" | "development" | "configured" | "verified";
@@ -6,11 +6,33 @@ export type ProviderStatus =
 export type RealtimeSessionConfig = {
   callId: string;
   tenantId: string;
+  projectId?: string | undefined;
+  correlationId?: string | undefined;
   model: string;
   voice: string;
   instructions: string;
   language: LanguageCode;
   toolDefinitions: RealtimeToolDefinition[];
+  vad?: RealtimeVadConfig | undefined;
+  inputAudioFormat?: RealtimeAudioFormat | undefined;
+  outputAudioFormat?: RealtimeAudioFormat | undefined;
+  reasoningEffort?: "low" | "medium" | "high" | undefined;
+};
+
+export type RealtimeVadConfig =
+  | {
+      type: "server_vad";
+      threshold: number;
+      prefixPaddingMs: number;
+      silenceDurationMs: number;
+      idleTimeoutMs?: number | undefined;
+    }
+  | { type: "semantic_vad"; eagerness: "low" | "medium" | "high" | "auto" };
+
+export type RealtimeAudioFormat = {
+  type: "audio/pcm";
+  rate: 24_000;
+  channels: 1;
 };
 
 export type RealtimeToolDefinition = {
@@ -21,29 +43,89 @@ export type RealtimeToolDefinition = {
 };
 
 export type RealtimeProviderEvent =
-  | { type: "session.ready"; providerSessionId: string }
-  | { type: "audio.output"; audioBase64: string }
-  | { type: "audio.interrupted" }
+  | {
+      type: "session.ready";
+      providerSessionId: string;
+      eventId?: string | undefined;
+    }
+  | {
+      type: "audio.output";
+      audioBase64: string;
+      itemId: string;
+      eventId?: string | undefined;
+    }
+  | {
+      type: "audio.interrupted";
+      itemId?: string | undefined;
+      eventId?: string | undefined;
+    }
+  | {
+      type: "speech.started";
+      audioStartMs?: number | undefined;
+      eventId?: string | undefined;
+    }
+  | {
+      type: "speech.stopped";
+      audioEndMs?: number | undefined;
+      eventId?: string | undefined;
+    }
+  | {
+      type: "response.started";
+      responseId: string;
+      eventId?: string | undefined;
+    }
+  | {
+      type: "response.completed";
+      responseId: string;
+      usage?: RealtimeUsage | undefined;
+      eventId?: string | undefined;
+    }
   | {
       type: "transcript.segment";
       speaker: "customer" | "ai";
       language: LanguageCode;
       text: string;
+      itemId: string;
+      final: boolean;
+      eventId?: string | undefined;
     }
   | {
       type: "tool.requested";
       callId: string;
       name: ToolName;
       arguments: unknown;
+      eventId?: string | undefined;
     }
-  | { type: "session.error"; code: string; retryable: boolean }
-  | { type: "session.closed"; reason: string };
+  | {
+      type: "rate_limits.updated";
+      remaining: number;
+      resetSeconds?: number | undefined;
+      eventId?: string | undefined;
+    }
+  | {
+      type: "session.error";
+      code: string;
+      retryable: boolean;
+      eventId?: string | undefined;
+    }
+  | { type: "session.closed"; reason: string; eventId?: string | undefined };
+
+export type RealtimeUsage = {
+  inputAudioTokens?: number | undefined;
+  outputAudioTokens?: number | undefined;
+  inputTextTokens?: number | undefined;
+  outputTextTokens?: number | undefined;
+  cachedTokens?: number | undefined;
+  totalTokens?: number | undefined;
+};
 
 export interface RealtimeVoiceSession {
   readonly providerSessionId: string;
+  updateSession?(config: RealtimeSessionConfig): Promise<void>;
+  sendText?(text: string): Promise<void>;
   appendAudio(audio: Uint8Array): Promise<void>;
   sendToolResult(callId: string, result: unknown): Promise<void>;
-  interrupt(): Promise<void>;
+  interrupt(itemId?: string, playedAudioMs?: number): Promise<void>;
   close(reason: string): Promise<void>;
 }
 
@@ -226,7 +308,15 @@ export interface NotificationProvider {
 }
 
 export const toolNames = [
+  "advance_call_flow",
   "search_knowledge",
+  "get_customer",
+  "update_customer_field",
+  "create_task",
+  "create_callback",
+  "submit_call_result",
+  "request_human_transfer",
+  "end_conversation",
   "find_customer",
   "create_customer",
   "create_lead",

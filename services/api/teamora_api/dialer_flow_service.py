@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from teamora_api.call_flow_service import ACTION_NODE_TYPES, definition_from_storage, localized
 from teamora_api.customer_service import validate_custom_fields
 from teamora_api.dependencies import Principal
-from teamora_api.enums import TaskPriority, TaskSource, TaskType, TelephonyCommandName
+from teamora_api.enums import (
+    TaskPriority,
+    TaskSource,
+    TaskType,
+    TelephonyCommandName,
+    TransferStatus,
+)
 from teamora_api.errors import ApiError
 from teamora_api.models import (
     Call,
@@ -19,6 +25,7 @@ from teamora_api.models import (
     CallFlowVersion,
     Customer,
     CustomerFieldDefinition,
+    TransferRequest,
 )
 from teamora_api.project_access import resolve_project
 from teamora_api.schemas.call_flows import CallFlowNode
@@ -197,6 +204,7 @@ async def _perform_action(
     value: object | None,
     idempotency_key: str,
     correlation_id: str,
+    allow_real_transfer: bool,
 ) -> str:
     if node.node_type == "update_customer_field":
         if node.customer_field_definition_id is None:
@@ -248,6 +256,26 @@ async def _perform_action(
         )
         return "completed"
     if node.node_type == "transfer_request":
+        if not allow_real_transfer:
+            existing = await session.scalar(
+                select(TransferRequest).where(
+                    TransferRequest.tenant_id == call.tenant_id,
+                    TransferRequest.call_id == call.id,
+                    TransferRequest.status == TransferStatus.REQUESTED,
+                )
+            )
+            if existing is None:
+                session.add(
+                    TransferRequest(
+                        tenant_id=call.tenant_id,
+                        call_id=call.id,
+                        status=TransferStatus.REQUESTED,
+                        reason=str(node.action_config.get("reason") or "ai_call_flow_requested")[:500],
+                        summary="AI Call Flow requested human assistance",
+                        requested_at=datetime.now(UTC),
+                    )
+                )
+            return "requested"
         project = await resolve_project(session, principal, call.project_id)
         destination = str(node.action_config.get("destination") or "operator-queue")[:120]
         selection = await TelephonyService().selection_for_call(session, call=call, project=project)
@@ -274,6 +302,7 @@ async def advance_execution(
     payload: DialerFlowStepRequest,
     idempotency_key: str,
     correlation_id: str,
+    allow_real_transfer: bool = True,
 ) -> CallFlowExecution:
     execution = await session.scalar(
         select(CallFlowExecution)
@@ -355,6 +384,7 @@ async def advance_execution(
             value=payload.value,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
+            allow_real_transfer=allow_real_transfer,
         )
     if node.node_type == "value_input":
         execution.values = {**execution.values, node.system_key: payload.value}

@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from teamora_api.audit import write_audit
 from teamora_api.config import get_settings
 from teamora_api.dependencies import Principal, SessionDep, require_permission
-from teamora_api.enums import LanguageCode, OperatorVersionStatus
+from teamora_api.enums import OperatorVersionStatus
 from teamora_api.errors import ApiError
 from teamora_api.models import AiOperator, AiOperatorVersion
 from teamora_api.project_access import resolve_project
@@ -32,6 +32,13 @@ ALLOWED_TOOL_NAMES = {
     "request_human_operator",
     "transfer_call",
     "end_call",
+    "get_customer",
+    "update_customer_field",
+    "create_task",
+    "create_callback",
+    "submit_call_result",
+    "request_human_transfer",
+    "end_conversation",
 }
 
 
@@ -93,7 +100,10 @@ async def create_operator(
     principal: Principal = require_permission("operators:manage"),
 ) -> AiOperatorRead:
     project = await resolve_project(session, principal, payload.project_id)
-    if LanguageCode.KAA in payload.allowed_languages and not get_settings().karakalpak_experimental:
+    if (
+        any(language.split("-", 1)[0] == "kaa" for language in payload.allowed_languages)
+        and not get_settings().karakalpak_experimental
+    ):
         raise ApiError(
             422, "kaa_feature_disabled", "Karakalpak is experimental and the feature flag is disabled"
         )
@@ -124,7 +134,7 @@ async def create_operator(
             status=OperatorVersionStatus.DRAFT,
             system_instructions=payload.system_instructions,
             greeting_by_language=payload.greeting_by_language,
-            allowed_languages=[language.value for language in payload.allowed_languages],
+            allowed_languages=payload.allowed_languages,
             allowed_tools=payload.allowed_tools,
             transfer_policy={
                 "on_explicit_request": True,

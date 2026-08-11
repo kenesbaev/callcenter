@@ -211,5 +211,8 @@ describe("RealtimeClient", () => {
     expect(realtimeQueryKeys("storage.issue_detected")).toContainEqual([
       "storage",
     ]);
+    expect(realtimeQueryKeys("ai.transcript_updated")).toContainEqual([
+      "ai-realtime",
+    ]);
   });
 });

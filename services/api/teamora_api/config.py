@@ -67,12 +67,23 @@ class Settings(BaseSettings):
 
     openai_api_key: SecretStr | None = None
     openai_webhook_secret: SecretStr | None = None
-    openai_realtime_model: str = "gpt-realtime-2.1-mini"
+    openai_realtime_enabled: bool = False
+    openai_realtime_provider: Literal["mock", "openai"] = "mock"
+    openai_realtime_model: str = "gpt-realtime-2.1"
+    openai_realtime_model_allowlist: str = "gpt-realtime-2.1,gpt-realtime-2,gpt-realtime-1.5"
     openai_realtime_voice: str = "marin"
+    openai_realtime_reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
+    openai_realtime_vad_type: Literal["server_vad", "semantic_vad"] = "server_vad"
+    openai_realtime_vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    openai_realtime_prefix_padding_ms: int = Field(default=300, ge=0, le=5000)
+    openai_realtime_silence_duration_ms: int = Field(default=700, ge=200, le=5000)
+    openai_realtime_idle_timeout_ms: int = Field(default=30_000, ge=5_000, le=120_000)
+    openai_realtime_tool_timeout_seconds: float = Field(default=8.0, ge=0.5, le=30.0)
 
     karakalpak_experimental: bool = False
     enable_call_simulator: bool = False
     rate_limit_requests_per_minute: int = Field(default=120, ge=10, le=10_000)
+    service_rate_limit_requests_per_minute: int = Field(default=6_000, ge=100, le=100_000)
     default_max_concurrent_calls: int = Field(default=5, ge=1, le=10_000)
     max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
     gateway_service_token: SecretStr | None = None
@@ -110,8 +121,22 @@ class Settings(BaseSettings):
     def safe_dial_prefixes(self) -> tuple[str, ...]:
         return tuple(item.strip() for item in self.telephony_safe_dial_prefixes.split(",") if item.strip())
 
+    @property
+    def realtime_model_allowlist(self) -> frozenset[str]:
+        return frozenset(
+            item.strip() for item in self.openai_realtime_model_allowlist.split(",") if item.strip()
+        )
+
     @model_validator(mode="after")
     def reject_insecure_production_defaults(self) -> Settings:
+        if self.openai_realtime_enabled and self.openai_realtime_model not in self.realtime_model_allowlist:
+            raise ValueError("OPENAI_REALTIME_MODEL is not allowlisted")
+        if (
+            self.openai_realtime_enabled
+            and self.openai_realtime_provider == "openai"
+            and self.openai_api_key is None
+        ):
+            raise ValueError("OPENAI_API_KEY is required when OpenAI Realtime is enabled")
         if self.app_env == "production":
             if self.jwt_signing_key.get_secret_value() == "development-only-signing-key-change-me":
                 raise ValueError("JWT_SIGNING_KEY must be set in production")
@@ -121,6 +146,8 @@ class Settings(BaseSettings):
                 raise ValueError("Call Simulator cannot be enabled in production")
             if self.credential_store_backend == "local":
                 raise ValueError("SECRET_BACKEND must use vault or kms in production")
+            if self.openai_realtime_enabled and self.openai_realtime_provider == "mock":
+                raise ValueError("Mock Realtime provider cannot be enabled in production")
         return self
 
 

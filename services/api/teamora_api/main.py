@@ -17,6 +17,7 @@ from teamora_api.logging import configure_logging
 from teamora_api.middleware import CorrelationMiddleware, CSRFMiddleware, LocalRateLimitMiddleware
 from teamora_api.realtime_hub import get_realtime_runtime
 from teamora_api.routers import (
+    ai_realtime,
     analytics,
     auth,
     background,
@@ -100,6 +101,7 @@ app.include_router(dialer.router, prefix=api_v1_prefix)
 app.include_router(calls.router, prefix=api_v1_prefix)
 app.include_router(simulator.router, prefix=api_v1_prefix)
 app.include_router(analytics.router, prefix=api_v1_prefix)
+app.include_router(ai_realtime.router, prefix=api_v1_prefix)
 app.include_router(operations.router, prefix=api_v1_prefix)
 app.include_router(webhooks.router, prefix=api_v1_prefix)
 

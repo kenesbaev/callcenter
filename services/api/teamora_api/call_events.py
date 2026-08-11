@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from teamora_api.models import CallEvent
+from teamora_api.models import Call, CallEvent
 
 
 async def append_call_event(
@@ -23,6 +23,14 @@ async def append_call_event(
     provider_timestamp: datetime | None = None,
     correlation_id: str | None = None,
 ) -> CallEvent:
+    # Call events are appended by independent state, telephony and AI requests.
+    # Serialize the per-call sequence at the aggregate root so concurrent
+    # producers cannot both choose the same next value.
+    locked_call = await session.scalar(
+        select(Call.id).where(Call.tenant_id == tenant_id, Call.id == call_id).with_for_update()
+    )
+    if locked_call is None:
+        raise ValueError("Call does not exist for the current tenant")
     persisted_sequence = int(
         await session.scalar(
             select(func.coalesce(func.max(CallEvent.sequence), 0)).where(

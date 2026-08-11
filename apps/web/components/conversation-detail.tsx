@@ -4,12 +4,21 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { StatusBadge } from "@teamora/ui";
 import { apiRequest } from "@/lib/api";
-import type { CallDetail } from "@/lib/types";
+import type { AIRealtimeSessionDetail, CallDetail } from "@/lib/types";
 
 export function ConversationDetail({ callId }: { callId: string }) {
   const call = useQuery({
     queryKey: ["calls", callId],
     queryFn: () => apiRequest<CallDetail>(`/calls/${callId}`),
+  });
+  const ai = useQuery({
+    queryKey: ["ai-realtime", "details", callId],
+    queryFn: () =>
+      apiRequest<AIRealtimeSessionDetail>(
+        `/calls/${callId}/ai-session/details`,
+      ),
+    enabled: call.data?.caller_type === "ai_agent",
+    retry: false,
   });
   if (call.isPending)
     return <div className="panel skeleton">Загрузка разговора</div>;
@@ -97,6 +106,83 @@ export function ConversationDetail({ callId }: { callId: string }) {
               <strong>{call.data.transfer_reason ?? "Нет"}</strong>
             </div>
           </div>
+          {ai.data && (
+            <section className="ai-session-summary">
+              <div className="row-between">
+                <h2>Voice AI</h2>
+                <StatusBadge
+                  tone={
+                    ai.data.session.state === "failed" ||
+                    ai.data.session.state === "degraded"
+                      ? "warning"
+                      : "primary"
+                  }
+                >
+                  {ai.data.session.state}
+                </StatusBadge>
+              </div>
+              <div className="session-facts">
+                <div>
+                  <span>Модель</span>
+                  <strong>{ai.data.session.model}</strong>
+                </div>
+                <div>
+                  <span>Язык</span>
+                  <strong>{ai.data.session.language_code.toUpperCase()}</strong>
+                </div>
+                <div>
+                  <span>Прерывания</span>
+                  <strong>{ai.data.session.interruption_count}</strong>
+                </div>
+                <div>
+                  <span>Стоимость</span>
+                  <strong>
+                    {ai.data.usage.some((item) => item.pricing_available)
+                      ? "по pricing snapshot"
+                      : "Недоступно"}
+                  </strong>
+                </div>
+              </div>
+              {ai.data.tools.length > 0 && (
+                <div className="ai-detail-list">
+                  <strong>Инструменты</strong>
+                  {ai.data.tools.map((tool) => (
+                    <span key={tool.id}>
+                      {tool.tool_name} · {tool.status}
+                      {tool.duration_ms === null
+                        ? ""
+                        : ` · ${tool.duration_ms} ms`}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {ai.data.citations.length > 0 && (
+                <div className="ai-detail-list">
+                  <strong>Источники</strong>
+                  {ai.data.citations.flatMap((retrieval) =>
+                    retrieval.no_match
+                      ? [
+                          <span key={`${retrieval.revision_id}-no-match`}>
+                            Информация не найдена
+                          </span>,
+                        ]
+                      : retrieval.citations.map((citation, index) => (
+                          <span key={`${retrieval.revision_id}-${index}`}>
+                            {String(citation.title ?? "Документ")}
+                            {citation.page
+                              ? ` · стр. ${String(citation.page)}`
+                              : ""}
+                          </span>
+                        )),
+                  )}
+                </div>
+              )}
+              <p className="compact-note">
+                Телефонные расходы не входят в AI usage. Цена AI показывается
+                только при сохранённом pricing snapshot.
+              </p>
+            </section>
+          )}
         </aside>
       </div>
     </>

@@ -150,7 +150,11 @@ export type TranscriptSegment = {
   sequence: number;
   speaker: "customer" | "ai" | "human" | "system" | "tool";
   language: "ru" | "en" | "uz" | "kaa";
+  language_code: string;
   text: string;
+  provider_item_id: string | null;
+  is_final: boolean;
+  interrupted: boolean;
   created_at: string;
 };
 
@@ -1242,6 +1246,100 @@ export type Integration = {
   verified_at: string | null;
   can_configure: boolean;
   note: string;
+};
+
+export type AIRealtimeStatus = {
+  configured: boolean;
+  enabled: boolean;
+  provider: "mock" | "openai";
+  model: string;
+  voice: string;
+  live_verification: string;
+  last_session_state: string | null;
+  last_safe_error: string | null;
+  active_sessions: number;
+  latency: {
+    metric: "first_audio_latency_ms";
+    samples: number;
+    p50_ms: number | null;
+    p95_ms: number | null;
+    p99_ms: number | null;
+    is_available: boolean;
+  };
+};
+
+export type AIRealtimeDiagnostic = {
+  status: string;
+  provider: string;
+  inputBytes: number;
+  outputBytes: number;
+  eventTypes: number;
+  vadVerified: boolean;
+  transcriptVerified: boolean;
+  usageVerified: boolean;
+  liveOpenAiVerified: boolean;
+};
+
+export type AIRealtimeSession = {
+  id: string;
+  call_id: string;
+  project_id: string;
+  state:
+    | "pending"
+    | "connecting"
+    | "active"
+    | "reconnecting"
+    | "degraded"
+    | "closing"
+    | "closed"
+    | "failed";
+  state_version: number;
+  provider: string;
+  model: string;
+  voice: string;
+  language_code: string;
+  provider_session_id: string | null;
+  interruption_count: number;
+  usage: Record<string, unknown>;
+  latency: Record<string, unknown>;
+  safe_error_code: string | null;
+  created_at: string;
+  connected_at: string | null;
+  closed_at: string | null;
+};
+
+export type AIRealtimeSessionDetail = {
+  session: AIRealtimeSession;
+  events: Array<{
+    id: string;
+    event_type: string;
+    aggregate_version: number;
+    occurred_at: string;
+  }>;
+  tools: Array<{
+    id: string;
+    tool_name: string;
+    status: string;
+    safe_result: Record<string, unknown> | null;
+    duration_ms: number | null;
+    created_at: string;
+  }>;
+  citations: Array<{
+    revision_id: string;
+    citations: Array<Record<string, unknown>>;
+    no_match: boolean;
+    latency_ms: number;
+    created_at: string;
+  }>;
+  usage: Array<{
+    metric: string;
+    quantity: string;
+    unit: string;
+    provider: string | null;
+    model: string | null;
+    pricing_available: boolean;
+    occurred_at: string;
+  }>;
 };
 
 export type TelephonyChannelUsage = {

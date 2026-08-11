@@ -36,7 +36,11 @@ class TranscriptSegmentRead(BaseModel):
     sequence: int
     speaker: TranscriptSpeaker
     language: LanguageCode
+    language_code: str
     text: str
+    provider_item_id: str | None
+    is_final: bool
+    interrupted: bool
     created_at: datetime
 
 

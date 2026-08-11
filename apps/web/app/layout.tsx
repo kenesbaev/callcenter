@@ -3,6 +3,10 @@ import { QueryProvider } from "@/components/query-provider";
 import "./globals.css";
 import "./kline-landing.css";
 
+// A strict nonce-based CSP requires request-time rendering so Next.js can
+// attach the per-request nonce to its bootstrap and hydration scripts.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: {
     default: "K-Line — контакт-центр для бизнеса",

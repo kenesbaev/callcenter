@@ -8,7 +8,32 @@ export type InboundAcceptance = {
   stateVersion: number;
   recordingAllowed: boolean;
   disclosureRequired: boolean;
+  aiSessionAvailable: boolean;
   duplicate: boolean;
+};
+
+export type AiSessionConfiguration = {
+  sessionId: string;
+  callId: string;
+  tenantId: string;
+  projectId: string;
+  stateVersion: number;
+  provider: "mock" | "openai";
+  model: string;
+  voice: string;
+  language: string;
+  instructions: string;
+  tools: Array<{
+    name: string;
+    description: string;
+    input_schema: Record<string, unknown>;
+    timeout_ms: number;
+  }>;
+  recordingAllowed: boolean;
+  disclosureRequired: boolean;
+  disclosureText?: string;
+  vad: Record<string, unknown>;
+  reasoningEffort?: "low" | "medium" | "high";
 };
 
 export class ProviderEventClient {
@@ -40,6 +65,27 @@ export class ProviderEventClient {
     await this.post("/api/v1/webhooks/telephony", event);
   }
 
+  async configureAiSession(context: {
+    tenantId: string;
+    projectId: string;
+    callId: string;
+    correlationId: string;
+    requestedLanguage?: string;
+  }): Promise<AiSessionConfiguration> {
+    return this.post<AiSessionConfiguration>(
+      "/api/v1/webhooks/ai-realtime/session",
+      context,
+    );
+  }
+
+  async publishAiEvent(event: Record<string, unknown>): Promise<void> {
+    await this.post("/api/v1/webhooks/ai-realtime/events", event);
+  }
+
+  async executeAiTool(request: Record<string, unknown>): Promise<unknown> {
+    return this.post<unknown>("/api/v1/webhooks/ai-realtime/tools", request);
+  }
+
   eventId(event: Record<string, unknown>): string {
     return `ari:${createHash("sha256").update(stableJson(event)).digest("hex")}`;
   }
@@ -55,25 +101,36 @@ export class ProviderEventClient {
       .update(`${webhookId}.${timestamp}.`)
       .update(raw)
       .digest("base64");
-    const response = await this.fetchImplementation(
-      `${this.apiBaseUrl.replace(/\/$/, "")}${path}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-teamora-id": webhookId,
-          "x-teamora-timestamp": timestamp,
-          "x-teamora-signature": `v1,${signature}`,
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await this.fetchImplementation(
+        `${this.apiBaseUrl.replace(/\/$/, "")}${path}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-teamora-id": webhookId,
+            "x-teamora-timestamp": timestamp,
+            "x-teamora-signature": `v1,${signature}`,
+          },
+          body: raw,
+          signal: AbortSignal.timeout(this.timeoutMs),
         },
-        body: raw,
-        signal: AbortSignal.timeout(this.timeoutMs),
-      },
-    );
-    if (!response.ok)
-      throw new Error(
-        `Provider event backend rejected status ${response.status}`,
       );
-    return (await response.json()) as T;
+      if (response.ok) return (await response.json()) as T;
+      lastStatus = response.status;
+      if (![429, 500, 502, 503, 504].includes(response.status) || attempt === 2)
+        break;
+      const retryAfterSeconds = Number(
+        response.headers.get("retry-after") ?? 0,
+      );
+      const delayMs = Math.min(
+        1_000,
+        retryAfterSeconds > 0 ? retryAfterSeconds * 1_000 : 100 * 2 ** attempt,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    throw new Error(`Provider event backend rejected status ${lastStatus}`);
   }
 }
 

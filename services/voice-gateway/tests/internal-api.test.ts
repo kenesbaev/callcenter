@@ -63,12 +63,18 @@ function mockProvider() {
   } as TelephonyProvider & { answer: ReturnType<typeof vi.fn> };
 }
 
-async function start(provider?: TelephonyProvider) {
+async function start(
+  provider?: TelephonyProvider,
+  runRealtimeDiagnostic?: () => Promise<
+    Record<string, string | number | boolean>
+  >,
+) {
   const handler = createGatewayRequestHandler({
     serviceToken,
     trustedHosts: ["127.0.0.1"],
     maxBodyBytes: 65_536,
     ...(provider ? { provider } : {}),
+    ...(runRealtimeDiagnostic ? { runRealtimeDiagnostic } : {}),
   });
   const server = createServer(async (request, response) => {
     if (!(await handler(request, response))) {
@@ -136,5 +142,30 @@ describe("Gateway internal API", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: { code: "asterisk_not_configured" },
     });
+  });
+
+  it("protects and returns the deterministic local Realtime diagnostic", async () => {
+    const diagnostic = vi.fn(async () => ({
+      status: "local_mock_passed",
+      liveOpenAiVerified: false,
+    }));
+    const baseUrl = await start(undefined, diagnostic);
+    const response = await fetch(
+      `${baseUrl}/internal/v1/ai/diagnostics/local`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+          "content-type": "application/json",
+        },
+        body: "{}",
+      },
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "local_mock_passed",
+      liveOpenAiVerified: false,
+    });
+    expect(diagnostic).toHaveBeenCalledOnce();
   });
 });

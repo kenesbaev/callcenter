@@ -25,6 +25,8 @@ from teamora_api.models import (
     AiOperator,
     AiOperatorVersion,
     Call,
+    Customer,
+    CustomerContact,
     PhoneNumber,
     Project,
     SipTrunk,
@@ -306,6 +308,25 @@ async def inbound_telephony_webhook(request: Request, session: SessionDep) -> In
                 AiOperatorVersion.status == OperatorVersionStatus.PUBLISHED,
             )
         )
+    customer = None
+    if event.caller_number:
+        customer_contact = await session.scalar(
+            select(CustomerContact).where(
+                CustomerContact.tenant_id == tenant_id,
+                CustomerContact.project_id == project_id,
+                CustomerContact.kind == "phone",
+                CustomerContact.normalized_value == event.caller_number,
+            )
+        )
+        if customer_contact is not None:
+            customer = await session.scalar(
+                select(Customer).where(
+                    Customer.tenant_id == tenant_id,
+                    Customer.project_id == project_id,
+                    Customer.id == customer_contact.customer_id,
+                    Customer.archived_at.is_(None),
+                )
+            )
     now = datetime.now(UTC)
     call = Call(
         tenant_id=tenant_id,
@@ -315,13 +336,18 @@ async def inbound_telephony_webhook(request: Request, session: SessionDep) -> In
         status=CallStatus.QUEUED,
         direction=CallDirection.INBOUND,
         caller_type=CallerType.AI_AGENT if ai_version_id else CallerType.HUMAN_OPERATOR,
+        customer_id=customer.id if customer else None,
         phone_number_id=phone.id,
         sip_trunk_id=trunk.id,
         ai_operator_id=project.ai_operator_id if ai_version_id else None,
         ai_operator_version_id=ai_version_id,
         call_flow_version_id=call_flow_version.id if call_flow_version else None,
         knowledge_base_revision_id=knowledge_revision.id if knowledge_revision else None,
-        language=project.default_language or (tenant_settings.default_language if tenant_settings else None),
+        language=(
+            customer.preferred_language
+            if customer is not None and customer.preferred_language is not None
+            else project.default_language or (tenant_settings.default_language if tenant_settings else None)
+        ),
         provider=event.provider,
         provider_state=CallStatus.QUEUED.value,
         from_number=event.caller_number,
@@ -434,6 +460,7 @@ def _inbound_response(
             "stateVersion": call.state_version,
             "recordingAllowed": recording_allowed,
             "disclosureRequired": disclosure,
+            "aiSessionAvailable": call.ai_operator_version_id is not None,
             "duplicate": duplicate,
         }
     )

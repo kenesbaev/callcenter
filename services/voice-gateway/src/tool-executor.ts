@@ -1,6 +1,4 @@
-// Ajv 6 exposes a CommonJS constructor; this import is intentionally isolated here.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import Ajv = require("ajv");
+import Ajv from "ajv";
 import type { ToolName } from "@teamora/contracts";
 import { toolNames } from "@teamora/contracts";
 import { toolRegistry } from "./tool-registry.js";
@@ -12,7 +10,10 @@ const validators = new Map(
 
 export type ToolContext = {
   tenantId: string;
+  projectId?: string;
   callId: string;
+  sessionId?: string;
+  correlationId?: string;
   allowedTools: ToolName[];
 };
 export type ToolDispatcher = (request: {
