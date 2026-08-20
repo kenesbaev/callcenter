@@ -1,0 +1,10 @@
+[res_pjsip]
+; Static trunk objects remain in pjsip.conf. Ephemeral browser endpoints are
+; created through ARI push configuration and stored in Asterisk's private
+; AstDB so credentials never enter Git or the application database.
+endpoint=config,pjsip.conf,criteria=type=endpoint
+endpoint=astdb,ps_endpoints
+auth=config,pjsip.conf,criteria=type=auth
+auth=astdb,ps_auths
+aor=config,pjsip.conf,criteria=type=aor
+aor=astdb,ps_aors

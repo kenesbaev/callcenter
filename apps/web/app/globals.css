@@ -1867,10 +1867,9 @@ button:disabled {
 }
 
 .telephony-status-grid strong {
-  overflow: hidden;
   color: var(--tv-text);
   font-size: 11px;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .ai-call-state,
@@ -3345,6 +3344,113 @@ button:disabled {
   grid-template-columns: minmax(0, 1.75fr) minmax(310px, 0.75fr);
   gap: 18px;
   align-items: start;
+}
+
+.transfer-offer {
+  margin-bottom: 20px;
+  border-color: color-mix(in srgb, var(--tv-primary) 42%, var(--tv-border));
+  box-shadow: 0 12px 30px rgb(17 104 95 / 10%);
+}
+
+.transfer-offer-heading,
+.transfer-offer-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.transfer-endpoint-choice {
+  display: grid;
+  min-width: min(360px, 100%);
+  gap: 5px;
+  color: var(--tv-text-secondary);
+  font-size: 0.78rem;
+}
+
+.transfer-endpoint-choice select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--tv-border);
+  border-radius: 10px;
+  background: var(--tv-surface);
+  color: var(--tv-text-primary);
+  padding: 0 10px;
+}
+
+.transfer-endpoint-choice.compact {
+  min-width: min(220px, 100%);
+}
+
+.transfer-offer-heading > div:nth-child(2) {
+  flex: 1;
+}
+
+.transfer-offer-heading h2 {
+  margin: 2px 0 0;
+}
+
+.transfer-offer-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.transfer-offer-grid > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--tv-border);
+  border-radius: 12px;
+  background: var(--tv-surface-muted);
+}
+
+.transfer-offer-grid span,
+.transfer-offer-grid strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.transfer-offer-grid span {
+  color: var(--tv-text-secondary);
+  font-size: 0.78rem;
+}
+
+.transfer-offer details {
+  margin: 14px 0;
+}
+
+.transfer-offer pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+  color: var(--tv-text-secondary);
+}
+
+.transfer-context-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  color: var(--tv-text-secondary);
+  font-size: 0.84rem;
+}
+
+@media (max-width: 1100px) {
+  .transfer-offer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .transfer-offer-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .transfer-offer-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .dialer-customer-panel {

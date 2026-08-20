@@ -91,6 +91,20 @@ export class VoiceSessionController {
     await this.interruptPlayback();
   }
 
+  async prepareHandoff(): Promise<void> {
+    if (!["active", "degraded"].includes(this.currentState)) return;
+    await this.interruptPlayback();
+    await this.options.clearPlayback?.();
+    this.currentState = "degraded";
+    await this.emit("ai.session_degraded", { code: "human_handoff_pending" });
+  }
+
+  async resumeAfterHandoff(): Promise<void> {
+    if (this.currentState !== "degraded" || !this.providerSession) return;
+    this.currentState = "active";
+    await this.emit("ai.listening", { resumed_after_handoff: true });
+  }
+
   async transfer(_queue: string, reason: string): Promise<void> {
     await this.requestHumanTransfer(reason);
   }
@@ -216,6 +230,7 @@ export class VoiceSessionController {
         this.seenEvents.delete(this.seenEvents.values().next().value as string);
     }
     if (event.type === "audio.output") {
+      if (this.currentState !== "active") return;
       const audio = Buffer.from(event.audioBase64, "base64");
       if (
         this.queuedAudioBytes + audio.byteLength >

@@ -48,6 +48,10 @@ beforeEach(() => {
     if (path === "/telephony/status")
       return Promise.resolve({
         status: "configured",
+        deployment_mode: "direct",
+        media_gateway_placement: "platform",
+        edge_connectivity: "not_applicable",
+        browser_webrtc: "configured_live_verification_required",
         asterisk: "configured_live_verification_required",
         ari: "configured_live_verification_required",
         sip_trunk: "configured",

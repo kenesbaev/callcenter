@@ -30,6 +30,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button, StatusBadge } from "@teamora/ui";
 import { useRealtime } from "@/components/realtime-provider";
+import { IncomingTransferCard } from "@/components/incoming-transfer-card";
 import { ApiClientError, apiRequest, idempotencyKey } from "@/lib/api";
 import type {
   Call,
@@ -829,6 +830,7 @@ export function DialerView() {
 
   return (
     <>
+      <IncomingTransferCard />
       <div className="page-heading row-between dialer-heading">
         <div>
           <h1>Рабочая станция оператора</h1>

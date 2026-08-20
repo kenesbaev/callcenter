@@ -7,8 +7,16 @@ endpoint_identifier_order=ip,username
 type=transport
 protocol=${SIP_PROVIDER_TRANSPORT}
 bind=0.0.0.0:${SIP_LOCAL_PORT}
-external_signaling_address=${ASTERISK_PUBLIC_ADDRESS}
-external_media_address=${ASTERISK_PUBLIC_ADDRESS}
+external_signaling_address=${ASTERISK_EXTERNAL_SIGNALING_ADDRESS}
+external_media_address=${ASTERISK_EXTERNAL_MEDIA_ADDRESS}
+local_net=${ASTERISK_LOCAL_NET}
+
+[transport-webrtc]
+type=transport
+protocol=ws
+bind=0.0.0.0
+external_signaling_address=${ASTERISK_EXTERNAL_SIGNALING_ADDRESS}
+external_media_address=${ASTERISK_EXTERNAL_MEDIA_ADDRESS}
 local_net=${ASTERISK_LOCAL_NET}
 
 ${SIP_AUTH_SECTION}

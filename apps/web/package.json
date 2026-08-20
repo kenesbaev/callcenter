@@ -20,6 +20,7 @@
     "react-dom": "latest",
     "react-hook-form": "latest",
     "recharts": "latest",
+    "sip.js": "0.21.2",
     "zod": "latest"
   },
   "devDependencies": {

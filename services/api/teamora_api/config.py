@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     openai_realtime_enabled: bool = False
     openai_realtime_provider: Literal["mock", "openai"] = "mock"
     openai_realtime_model: str = "gpt-realtime-2.1"
-    openai_realtime_model_allowlist: str = "gpt-realtime-2.1,gpt-realtime-2,gpt-realtime-1.5"
+    openai_realtime_model_allowlist: str = (
+        "gpt-realtime-2.1-mini,gpt-realtime-2.1,gpt-realtime-2,gpt-realtime-1.5"
+    )
     openai_realtime_voice: str = "marin"
     openai_realtime_reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
     openai_realtime_vad_type: Literal["server_vad", "semantic_vad"] = "server_vad"
@@ -96,6 +98,16 @@ class Settings(BaseSettings):
     telephony_provider_event_tolerance_seconds: int = Field(default=300, ge=30, le=900)
     telephony_channel_lease_seconds: int = Field(default=120, ge=30, le=600)
     telephony_safe_dial_prefixes: str = ""
+    telephony_sip_architecture: Literal["direct", "uz_edge"] = "direct"
+    telephony_media_gateway_placement: Literal["platform", "edge"] = "platform"
+    telephony_edge_tunnel_enabled: bool = False
+    telephony_edge_tunnel_cidr: str = ""
+    telephony_edge_platform_api_url: str = ""
+    transfer_offer_timeout_seconds: int = Field(default=20, ge=5, le=120)
+    transfer_max_attempts: int = Field(default=3, ge=1, le=20)
+    transfer_routing_strategy: Literal["longest_idle", "round_robin", "priority"] = "longest_idle"
+    operator_webrtc_wss_url: str = "wss://localhost/sip-ws"
+    operator_webrtc_credential_ttl_seconds: int = Field(default=60, ge=30, le=120)
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -148,6 +160,10 @@ class Settings(BaseSettings):
                 raise ValueError("SECRET_BACKEND must use vault or kms in production")
             if self.openai_realtime_enabled and self.openai_realtime_provider == "mock":
                 raise ValueError("Mock Realtime provider cannot be enabled in production")
+            if self.telephony_sip_architecture == "uz_edge" and not self.telephony_edge_tunnel_enabled:
+                raise ValueError("TELEPHONY_EDGE_TUNNEL_ENABLED must be true for a production UZ edge")
+            if self.operator_webrtc_wss_url.startswith("ws://"):
+                raise ValueError("OPERATOR_WEBRTC_WSS_URL must use wss:// in production")
         return self
 
 

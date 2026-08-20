@@ -152,6 +152,18 @@ export class VoiceRuntime {
     }
   }
 
+  async prepareHandoff(callId: string): Promise<void> {
+    const active = this.active.get(callId);
+    if (!active) return;
+    await active.controller.prepareHandoff();
+  }
+
+  async resumeAfterHandoff(callId: string): Promise<void> {
+    const active = this.active.get(callId);
+    if (!active) return;
+    await active.controller.resumeAfterHandoff();
+  }
+
   private async stopOnce(callId: string, reason: string): Promise<void> {
     const active = this.active.get(callId);
     this.mediaPool.get(callId)?.detachAudioHandler();

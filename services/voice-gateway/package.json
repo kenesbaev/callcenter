@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "esbuild src/index.ts src/mock-openai-server.ts --bundle --packages=external --alias:@teamora/config=../../packages/config/src/index.ts --alias:@teamora/contracts=../../packages/contracts/src/index.ts --platform=node --target=node22 --format=esm --outdir=dist --sourcemap",
+    "build": "esbuild src/index.ts src/mock-openai-server.ts src/live-openai-canary.ts --bundle --packages=external --alias:@teamora/config=../../packages/config/src/index.ts --alias:@teamora/contracts=../../packages/contracts/src/index.ts --platform=node --target=node22 --format=esm --outdir=dist --sourcemap",
+    "test:live-openai": "node dist/live-openai-canary.js",
     "start:mock-openai": "node dist/mock-openai-server.js",
     "start": "node dist/index.js",
     "lint": "eslint .",

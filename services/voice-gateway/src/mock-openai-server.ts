@@ -107,6 +107,14 @@ websocket.on("connection", (socket) => {
           return;
         }
       }
+      if (scenario === "transfer_e2e" && voiceTurn === 0) {
+        voiceTurn += 1;
+        toolPending = true;
+        emitTurnAndTool(socket, "request_human_transfer", {
+          reason: "Deterministic customer request for a live operator",
+        });
+        return;
+      }
       if (scenario === "delayed") {
         setTimeout(() => respond(socket, responseItem, false), 75);
       } else {

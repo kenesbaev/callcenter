@@ -38,7 +38,10 @@ async def reserve_channel(
     call: Call,
     trunk_id: UUID,
     direction: CallDirection,
+    purpose: str = "customer_leg",
 ) -> TelephonyChannelReservation:
+    if purpose not in {"customer_leg", "operator_transfer"}:
+        raise ApiError(422, "telephony_reservation_purpose_invalid", "Channel purpose is invalid")
     await session.execute(
         select(func.pg_advisory_xact_lock(func.hashtextextended(f"sip-trunk:{trunk_id}", 0)))
     )
@@ -46,6 +49,7 @@ async def reserve_channel(
         select(TelephonyChannelReservation).where(
             TelephonyChannelReservation.tenant_id == call.tenant_id,
             TelephonyChannelReservation.call_id == call.id,
+            TelephonyChannelReservation.purpose == purpose,
         )
     )
     if existing is not None:
@@ -87,6 +91,7 @@ async def reserve_channel(
         sip_trunk_id=trunk.id,
         call_id=call.id,
         direction=direction.value,
+        purpose=purpose,
         pool_key=pool_key,
         status="reserved",
         heartbeat_at=datetime.now(UTC),
@@ -102,6 +107,7 @@ async def bind_provider_channel(session: AsyncSession, *, call: Call, provider_c
         select(TelephonyChannelReservation).where(
             TelephonyChannelReservation.tenant_id == call.tenant_id,
             TelephonyChannelReservation.call_id == call.id,
+            TelephonyChannelReservation.purpose == "customer_leg",
             TelephonyChannelReservation.status == "reserved",
         )
     )
@@ -111,11 +117,37 @@ async def bind_provider_channel(session: AsyncSession, *, call: Call, provider_c
 
 
 async def release_call_channel(session: AsyncSession, *, call: Call, reason: str) -> None:
+    reservations = list(
+        await session.scalars(
+            select(TelephonyChannelReservation)
+            .where(
+                TelephonyChannelReservation.tenant_id == call.tenant_id,
+                TelephonyChannelReservation.call_id == call.id,
+            )
+            .with_for_update()
+        )
+    )
+    active = [reservation for reservation in reservations if reservation.status == "reserved"]
+    if not active:
+        return
+    now = datetime.now(UTC)
+    for reservation in active:
+        reservation.status = "released"
+        reservation.released_at = now
+        reservation.release_reason = reason[:80]
+        reservation.lock_version += 1
+    # SessionFactory intentionally disables autoflush. Make released capacity
+    # visible to a same-transaction replacement reservation.
+    await session.flush()
+
+
+async def release_transfer_channel(session: AsyncSession, *, call: Call, reason: str) -> None:
     reservation = await session.scalar(
         select(TelephonyChannelReservation)
         .where(
             TelephonyChannelReservation.tenant_id == call.tenant_id,
             TelephonyChannelReservation.call_id == call.id,
+            TelephonyChannelReservation.purpose == "operator_transfer",
         )
         .with_for_update()
     )
@@ -125,8 +157,6 @@ async def release_call_channel(session: AsyncSession, *, call: Call, reason: str
     reservation.released_at = datetime.now(UTC)
     reservation.release_reason = reason[:80]
     reservation.lock_version += 1
-    # SessionFactory intentionally disables autoflush. Make released capacity
-    # visible to a same-transaction replacement reservation.
     await session.flush()
 
 

@@ -5,7 +5,7 @@ services:
       OPENAI_REALTIME_PROVIDER: openai
       OPENAI_API_KEY: local-test-token-not-a-secret
       OPENAI_REALTIME_MODEL: gpt-realtime-2.1
-      OPENAI_REALTIME_MODEL_ALLOWLIST: gpt-realtime-2.1,gpt-realtime-2,gpt-realtime-1.5
+      OPENAI_REALTIME_MODEL_ALLOWLIST: gpt-realtime-2.1-mini,gpt-realtime-2.1,gpt-realtime-2,gpt-realtime-1.5
       KARAKALPAK_EXPERIMENTAL: "true"
 
   voice-gateway:
@@ -15,11 +15,11 @@ services:
       OPENAI_API_KEY: local-test-token-not-a-secret
       OPENAI_REALTIME_URL: ws://mock-openai-realtime:8790/v1/realtime
       OPENAI_REALTIME_MODEL: gpt-realtime-2.1
-      OPENAI_REALTIME_MODEL_ALLOWLIST: gpt-realtime-2.1,gpt-realtime-2,gpt-realtime-1.5
+      OPENAI_REALTIME_MODEL_ALLOWLIST: gpt-realtime-2.1-mini,gpt-realtime-2.1,gpt-realtime-2,gpt-realtime-1.5
     depends_on:
       mock-openai-realtime:
         condition: service_healthy
 
   mock-openai-realtime:
     environment:
-      MOCK_OPENAI_SCENARIO: voice_e2e
+      MOCK_OPENAI_SCENARIO: ${MOCK_OPENAI_SCENARIO:-voice_e2e}

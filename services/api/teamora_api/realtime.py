@@ -34,6 +34,9 @@ CALL_EVENT_TYPES = frozenset(
 TRANSFER_EVENT_TYPES = frozenset(
     {
         "transfer.requested",
+        "transfer.offered",
+        "transfer.claimed",
+        "transfer.declined",
         "transfer.started",
         "transfer.completed",
         "transfer.failed",

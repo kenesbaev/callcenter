@@ -106,6 +106,18 @@ export function ConversationDetail({ callId }: { callId: string }) {
               <strong>{call.data.transfer_reason ?? "Нет"}</strong>
             </div>
           </div>
+          {call.data.transfers.length > 0 && (
+            <section className="ai-session-summary">
+              <h2>Перевод живому оператору</h2>
+              <div className="ai-detail-list">
+                {call.data.transfers.map((transfer) => (
+                  <span key={transfer.id}>
+                    {transfer.reason} · {transfer.status}
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
           {ai.data && (
             <section className="ai-session-summary">
               <div className="row-between">

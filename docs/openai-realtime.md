@@ -1,6 +1,6 @@
 # OpenAI Realtime Voice AI
 
-Contract review date: **2026-08-05**. K-Line uses the current server-to-server
+Contract review date: **2026-08-12**. K-Line uses the current server-to-server
 WebSocket contract documented by OpenAI, not the retired preview contract:
 
 - [Realtime API](https://developers.openai.com/api/docs/guides/realtime)
@@ -9,6 +9,8 @@ WebSocket contract documented by OpenAI, not the retired preview contract:
 - [Realtime model prompting](https://developers.openai.com/api/docs/guides/realtime-models-prompting)
 - [Voice agents](https://developers.openai.com/api/docs/guides/voice-agents)
 - [Realtime WebSocket](https://developers.openai.com/api/docs/guides/realtime-websocket)
+- [Realtime costs](https://developers.openai.com/api/docs/guides/realtime-costs)
+- [`gpt-realtime-2.1-mini`](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini)
 
 ## Boundary and configuration
 
@@ -41,6 +43,14 @@ Configuration is centralized:
 The default configured model is `gpt-realtime-2.1`, but startup rejects a model
 outside the explicit allowlist. No silent fallback occurs. A configured model is
 not considered account-access verified until a separately authorized live canary.
+`gpt-realtime-2.1-mini` is allowlisted for the bounded live canary, but the canary
+still fails closed unless that exact model is configured and account access is
+confirmed by the API.
+
+The reviewed GA contract uses `session.update`, `input_audio_buffer.append`,
+`response.output_audio.delta`, `response.cancel` and
+`conversation.item.truncate`. Audio playback and truncation accounting remain a
+server-side Gateway responsibility. The legacy preview header/contract is not used.
 
 ## Session and audio lifecycle
 
@@ -126,3 +136,29 @@ requires a securely configured key, confirmed model access, explicit permission 
 spend a capped test budget and local test audio. No live customer number is used.
 The complete product path remains blocked until both live OpenAI and real provider
 SIP audio are verified end to end.
+
+## Bounded live canary
+
+Build the Gateway first, place a synthetic PCM16LE/24 kHz/mono fixture under
+`services/voice-gateway/tests/fixtures/live-openai/`, and run
+`npm run test:live-openai --workspace @teamora/voice-gateway` only after separate
+spend authorization. The canary requires all of the following in the process
+environment:
+
+- a server-side `OPENAI_API_KEY`;
+- `OPENAI_REALTIME_MODEL=gpt-realtime-2.1-mini` and an explicit allowlist entry;
+- `OPENAI_LIVE_TEST_APPROVAL=I_APPROVE_OPENAI_TEST_SPEND`;
+- budget, session-count, per-session and total timeout limits;
+- a path inside the dedicated synthetic fixture directory.
+
+The hard limits are at most three sessions, at most three minutes per session and
+at most USD 10. There is no automatic retry. The canary checks auth/model access,
+session update, VAD, audio, transcript, a synthetic read-only knowledge tool,
+cancel/truncate, usage and graceful close. It prints only a safe result and a
+conservative cost upper bound; it never prints the API key.
+
+The 2026-08-12 model page lists per-million-token prices for the mini model as
+USD 10 input audio, USD 20 output audio, USD 0.60 input text and USD 2.40 output
+text. The canary charges cached input at the normal input rate for its guardrail,
+so its number is deliberately an upper bound rather than an invoice. Production
+cost reporting continues to require stored provider usage and a pricing snapshot.

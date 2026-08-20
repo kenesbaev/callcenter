@@ -148,6 +148,7 @@ PROVIDER_EVENT_TARGETS: dict[str, CallStatus] = {
     "transfer.requested": CallStatus.TRANSFER_REQUESTED,
     "transfer.started": CallStatus.TRANSFERRING,
     "transfer.completed": CallStatus.TRANSFERRED,
+    "transfer.failed": CallStatus.ACTIVE,
     "call.busy": CallStatus.BUSY,
     "call.no_answer": CallStatus.NO_ANSWER,
     "call.failed": CallStatus.FAILED,

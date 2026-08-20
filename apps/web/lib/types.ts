@@ -987,6 +987,14 @@ export type CallDetail = Call & {
     result: string;
     generated_by: string;
   } | null;
+  transfers: Array<{
+    id: string;
+    status: LiveTransfer["status"];
+    reason: string;
+    requested_at: string;
+    connected_at: string | null;
+    resolved_at: string | null;
+  }>;
 };
 
 export type Dashboard = {
@@ -1367,6 +1375,10 @@ export type TelephonyStatus = {
     | "live_audio_verified"
     | "degraded"
     | "failed";
+  deployment_mode: "direct" | "uz_edge";
+  media_gateway_placement: "platform" | "edge";
+  edge_connectivity: string;
+  browser_webrtc: string;
   asterisk: string;
   ari: string;
   sip_trunk: string;
@@ -1408,4 +1420,94 @@ export type TenantSettings = {
   retention_days: number;
   max_concurrent_calls: number;
   updated_at: string;
+};
+
+export type LiveTransferAttempt = {
+  id: string;
+  membership_id: string;
+  attempt_number: number;
+  destination_type: "browser" | "sip" | "mobile";
+  status: string;
+  offered_at: string;
+  expires_at: string;
+  claimed_at: string | null;
+  answered_at: string | null;
+  safe_error_code: string | null;
+};
+
+export type LiveTransfer = {
+  id: string;
+  call_id: string;
+  project_id: string;
+  status:
+    | "requested"
+    | "queued"
+    | "offered"
+    | "claimed"
+    | "connecting"
+    | "connected"
+    | "declined"
+    | "timed_out"
+    | "assigned"
+    | "completed"
+    | "callback_requested"
+    | "cancelled"
+    | "failed";
+  reason: string;
+  summary: string;
+  language_code: string;
+  routing_strategy: string;
+  destination_type: "browser" | "sip" | "mobile";
+  claimed_membership_id: string | null;
+  context: {
+    customer_id?: string | null;
+    customer_name?: string | null;
+    project_id?: string;
+    language?: string;
+    flow_node_id?: string | null;
+    summary?: string;
+    transcript_excerpt?: string;
+    tools?: string[];
+    recent_calls?: Array<{
+      id: string;
+      status: string;
+      started_at: string | null;
+    }>;
+    related_tasks?: Array<{
+      id: string;
+      type: string;
+      status: string;
+      due_at: string;
+    }>;
+  };
+  attempt_count: number;
+  max_attempts: number;
+  lock_version: number;
+  requested_at: string;
+  offer_expires_at: string | null;
+  claimed_at: string | null;
+  connected_at: string | null;
+  resolved_at: string | null;
+  last_error_code: string | null;
+  attempts: LiveTransferAttempt[];
+};
+
+export type OperatorWebRtcConfiguration = {
+  websocket_url: string;
+  sip_uri: string;
+  authorization: string;
+  expires_at: string;
+  ice_servers: RTCIceServer[];
+  dtls_srtp_required: boolean;
+  register_required: boolean;
+  live_verification: string;
+};
+
+export type OperatorTransferEndpoint = {
+  id: string;
+  endpoint_type: "browser" | "sip" | "mobile";
+  display_hint: string;
+  is_verified: boolean;
+  is_enabled: boolean;
+  lock_version: number;
 };

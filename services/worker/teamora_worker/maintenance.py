@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncpg
+import httpx
 
 from teamora_worker.background_jobs import (
     BackgroundJobClaim,
     JobExecutionContext,
+    JobExecutionError,
     JobHandler,
     JobResult,
     _insert_event,
@@ -39,10 +41,71 @@ class MaintenanceHandlers:
             "realtime.outbox_cleanup": self.cleanup_realtime_outbox,
             "customer_import.expired_preview_cleanup": self.cleanup_expired_import_previews,
             "recording.upload": self.recordings.handle,
+            "transfer.offer_timeout": self.process_transfer_offer_timeout,
         }
         handlers.update(self.storage.registry())
         handlers.update(self.customer_import.registry())
         return handlers
+
+    async def process_transfer_offer_timeout(
+        self,
+        job: BackgroundJobClaim,
+        context: JobExecutionContext,
+    ) -> JobResult:
+        context.ensure_active()
+        transfer_id = job.safe_payload.get("transfer_request_id")
+        if not isinstance(transfer_id, str):
+            raise JobExecutionError(
+                "transfer_id_missing",
+                "Transfer timeout job is missing its request identifier",
+                retryable=False,
+            )
+        token = context.settings.gateway_service_token
+        if token is None:
+            raise JobExecutionError(
+                "service_token_unavailable",
+                "Internal transfer service authentication is not configured",
+                retryable=False,
+            )
+        try:
+            async with httpx.AsyncClient(
+                base_url=context.settings.api_internal_url,
+                timeout=httpx.Timeout(5.0),
+            ) as client:
+                response = await client.post(
+                    "/internal/v1/transfers/process-expired",
+                    headers={"Authorization": f"Bearer {token.get_secret_value()}"},
+                    json={
+                        "tenant_id": str(job.tenant_id),
+                        "transfer_request_id": transfer_id,
+                        "job_id": str(job.id),
+                    },
+                )
+        except httpx.HTTPError as exc:
+            raise JobExecutionError(
+                "transfer_service_unavailable",
+                "Internal transfer service is unavailable",
+                retryable=True,
+            ) from exc
+        if response.status_code in {401, 403, 422}:
+            raise JobExecutionError(
+                "transfer_service_rejected",
+                "Internal transfer service rejected the timeout command",
+                retryable=False,
+            )
+        if response.status_code >= 400:
+            raise JobExecutionError(
+                "transfer_service_failed",
+                "Internal transfer timeout processing failed",
+                retryable=True,
+            )
+        result = response.json()
+        return JobResult(
+            {
+                "processed": bool(result.get("processed")),
+                "status": str(result.get("status", "unchanged"))[:40],
+            }
+        )
 
     async def cleanup_realtime_outbox(
         self,

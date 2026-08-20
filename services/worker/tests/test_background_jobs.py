@@ -6,6 +6,7 @@ from typing import cast
 from uuid import uuid4
 
 import asyncpg
+import httpx
 import pytest
 
 from teamora_worker.background_jobs import (
@@ -41,6 +42,51 @@ def claim(*, attempt: int = 1, maximum: int = 4) -> BackgroundJobClaim:
         correlation_id="test-correlation",
         causation_id=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_transfer_timeout_handler_uses_service_auth_without_logging_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client"] = kwargs
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, path: str, **kwargs: object) -> httpx.Response:
+            captured["path"] = path
+            captured["request"] = kwargs
+            return httpx.Response(200, json={"processed": True, "status": "offered"})
+
+    monkeypatch.setattr("teamora_worker.maintenance.httpx.AsyncClient", FakeClient)
+    transfer_id = uuid4()
+    transfer_job = BackgroundJobClaim(
+        **{
+            **claim().__dict__,
+            "job_type": "transfer.offer_timeout",
+            "safe_payload": {"transfer_request_id": str(transfer_id)},
+        }
+    )
+    configured = settings(
+        api_internal_url="http://api:8000",
+        gateway_service_token="test-internal-token",  # noqa: S106 - isolated service test
+    )
+    context = JobExecutionContext(cast(asyncpg.Pool, object()), configured, transfer_job)
+    handler = object.__new__(MaintenanceHandlers)
+    result = await handler.process_transfer_offer_timeout(transfer_job, context)
+
+    assert result.metadata == {"processed": True, "status": "offered"}
+    assert captured["path"] == "/internal/v1/transfers/process-expired"
+    request = cast(dict[str, object], captured["request"])
+    headers = cast(dict[str, str], request["headers"])
+    assert headers["Authorization"] == "Bearer test-internal-token"
 
 
 def test_retry_backoff_is_deterministic_exponential_and_bounded() -> None:

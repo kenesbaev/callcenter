@@ -1,0 +1,9 @@
+[Interface]
+Address = 10.77.0.2/32
+PrivateKey = <EDGE_PRIVATE_KEY_FROM_SECRET_STORE>
+
+[Peer]
+PublicKey = <PLATFORM_PUBLIC_KEY>
+Endpoint = <CONTABO_PUBLIC_IP>:51820
+AllowedIPs = 10.77.0.1/32
+PersistentKeepalive = 25

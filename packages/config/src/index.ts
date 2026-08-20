@@ -41,6 +41,7 @@ export const gatewayEnvironmentSchema = z
     OPENAI_REALTIME_URL: optionalUrl,
     OPENAI_REALTIME_MODEL: z.string().min(1).default("gpt-realtime-2.1"),
     OPENAI_REALTIME_MODEL_ALLOWLIST: commaSeparated.default([
+      "gpt-realtime-2.1-mini",
       "gpt-realtime-2.1",
       "gpt-realtime-2",
       "gpt-realtime-1.5",
@@ -129,6 +130,11 @@ export const gatewayEnvironmentSchema = z
       .min(1_025)
       .max(65_535)
       .default(40_099),
+    TELEPHONY_SIP_ARCHITECTURE: z.enum(["direct", "uz_edge"]).default("direct"),
+    TELEPHONY_MEDIA_GATEWAY_PLACEMENT: z
+      .enum(["platform", "edge"])
+      .default("platform"),
+    TELEPHONY_EDGE_TUNNEL_ENABLED: booleanFromString,
     GATEWAY_SERVICE_TOKEN: z.string().min(20),
     GATEWAY_TRUSTED_HOSTS: z
       .string()
@@ -186,6 +192,16 @@ export const gatewayEnvironmentSchema = z
         path: ["ASTERISK_RTP_PORT_END"],
         message:
           "ASTERISK_RTP_PORT_END must be greater than or equal to ASTERISK_RTP_PORT_START",
+      });
+    }
+    if (
+      value.TELEPHONY_SIP_ARCHITECTURE === "uz_edge" &&
+      !value.TELEPHONY_EDGE_TUNNEL_ENABLED
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["TELEPHONY_EDGE_TUNNEL_ENABLED"],
+        message: "A Uzbekistan telephony edge requires a private tunnel",
       });
     }
     if (

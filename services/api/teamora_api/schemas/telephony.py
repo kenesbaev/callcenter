@@ -102,6 +102,10 @@ class TelephonyChannelUsageRead(BaseModel):
 
 class TelephonyStatusRead(BaseModel):
     status: str
+    deployment_mode: str
+    media_gateway_placement: str
+    edge_connectivity: str
+    browser_webrtc: str
     asterisk: str
     ari: str
     sip_trunk: str

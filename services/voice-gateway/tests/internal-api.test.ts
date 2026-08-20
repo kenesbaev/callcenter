@@ -6,6 +6,10 @@ import type {
   TelephonyProvider,
 } from "@teamora/contracts";
 import { createGatewayRequestHandler } from "../src/internal-api.js";
+import type {
+  OperatorHandoffController,
+  WebRtcProvisioningController,
+} from "../src/internal-api.js";
 
 const serviceToken = "gateway-service-token-for-tests";
 const body = {
@@ -68,6 +72,8 @@ async function start(
   runRealtimeDiagnostic?: () => Promise<
     Record<string, string | number | boolean>
   >,
+  handoffController?: OperatorHandoffController,
+  webRtcProvisioner?: WebRtcProvisioningController,
 ) {
   const handler = createGatewayRequestHandler({
     serviceToken,
@@ -75,6 +81,8 @@ async function start(
     maxBodyBytes: 65_536,
     ...(provider ? { provider } : {}),
     ...(runRealtimeDiagnostic ? { runRealtimeDiagnostic } : {}),
+    ...(handoffController ? { handoffController } : {}),
+    ...(webRtcProvisioner ? { webRtcProvisioner } : {}),
   });
   const server = createServer(async (request, response) => {
     if (!(await handler(request, response))) {
@@ -167,5 +175,100 @@ describe("Gateway internal API", () => {
       liveOpenAiVerified: false,
     });
     expect(diagnostic).toHaveBeenCalledOnce();
+  });
+
+  it("authenticates and validates operator handoff commands", async () => {
+    const handoff: OperatorHandoffController = {
+      dialOperator: vi.fn(async () => ({
+        status: "connecting" as const,
+        operatorChannelId: "teamora-operator-call",
+      })),
+      cancelOperator: vi.fn(async () => undefined),
+    };
+    const baseUrl = await start(undefined, undefined, handoff);
+    const payload = {
+      tenantId: body.tenantId,
+      projectId: body.projectId,
+      callId: body.callId,
+      transferRequestId: "10000000-0000-4000-8000-000000000005",
+      destinationType: "browser",
+      destination: "webrtc:10000000-0000-4000-8000-000000000006",
+      idempotencyKey: "transfer-attempt-one",
+    };
+    const unauthorized = await fetch(`${baseUrl}/internal/v1/transfers/dial`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(unauthorized.status).toBe(401);
+    const accepted = await fetch(`${baseUrl}/internal/v1/transfers/dial`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${serviceToken}`,
+        "content-type": "application/json",
+        "x-correlation-id": "handoff-correlation",
+      },
+      body: JSON.stringify(payload),
+    });
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toMatchObject({
+      status: "connecting",
+      operatorChannelId: "teamora-operator-call",
+    });
+    expect(handoff.dialOperator).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: body.tenantId,
+        destinationType: "browser",
+        correlationId: "handoff-correlation",
+      }),
+    );
+    const replay = await fetch(`${baseUrl}/internal/v1/transfers/dial`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${serviceToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    expect(replay.status).toBe(202);
+    expect(handoff.dialOperator).toHaveBeenCalledOnce();
+  });
+
+  it("provisions an ephemeral WebRTC endpoint without returning its password", async () => {
+    const provisioner: WebRtcProvisioningController = {
+      provisionWebRtcEndpoint: vi.fn(async () => undefined),
+      revokeWebRtcEndpoint: vi.fn(async () => undefined),
+    };
+    const baseUrl = await start(undefined, undefined, undefined, provisioner);
+    const password = "ephemeral-browser-password-with-enough-entropy";
+    const response = await fetch(
+      `${baseUrl}/internal/v1/transfers/webrtc/provision`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          membershipId: "10000000-0000-4000-8000-000000000006",
+          username: "operator-10000000-0000-4000-8000-000000000006",
+          password,
+          ttlSeconds: 30,
+        }),
+      },
+    );
+    expect(response.status).toBe(201);
+    const payload = await response.json();
+    expect(payload).toEqual({
+      status: "provisioned",
+      username: "operator-10000000-0000-4000-8000-000000000006",
+      expiresInSeconds: 30,
+    });
+    expect(JSON.stringify(payload)).not.toContain(password);
+    expect(provisioner.provisionWebRtcEndpoint).toHaveBeenCalledWith(
+      "10000000-0000-4000-8000-000000000006",
+      "operator-10000000-0000-4000-8000-000000000006",
+      password,
+    );
   });
 });

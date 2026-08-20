@@ -54,7 +54,17 @@ export class AsteriskAriProvider implements TelephonyProvider {
       callerId,
       channelId,
     });
-    await this.request(`/channels?${query.toString()}`, { method: "POST" });
+    try {
+      await this.request(`/channels?${query.toString()}`, { method: "POST" });
+    } catch (error) {
+      if (!(error instanceof AsteriskAriError) || error.status !== 409)
+        throw error;
+      // The deterministic channel ID makes a retried originate safe after a
+      // Gateway restart. Accept 409 only when that exact channel still exists.
+      await this.request(`/channels/${encodeURIComponent(channelId)}`, {
+        method: "GET",
+      });
+    }
     this.channelContexts.set(channelId, context);
     return result(context, this.name, "ringing", channelId);
   }
@@ -228,6 +238,133 @@ export class AsteriskAriProvider implements TelephonyProvider {
     );
   }
 
+  async removeChannelFromBridge(
+    bridgeId: string,
+    channelId: string,
+  ): Promise<void> {
+    const query = new URLSearchParams({ channel: channelId });
+    await this.request(
+      `/bridges/${encodeURIComponent(bridgeId)}/removeChannel?${query}`,
+      { method: "POST" },
+    );
+  }
+
+  async startMoh(bridgeId: string): Promise<void> {
+    await this.request(`/bridges/${encodeURIComponent(bridgeId)}/moh`, {
+      method: "POST",
+    });
+  }
+
+  async stopMoh(bridgeId: string): Promise<void> {
+    await this.request(`/bridges/${encodeURIComponent(bridgeId)}/moh`, {
+      method: "DELETE",
+    });
+  }
+
+  async hangupChannel(channelId: string): Promise<void> {
+    await this.request(`/channels/${encodeURIComponent(channelId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async originateOperatorLeg(
+    context: TelephonyCommandContext,
+    destinationType: "browser" | "sip" | "mobile",
+    destination: string,
+  ): Promise<string> {
+    const channelId = `teamora-operator-${context.callId}`;
+    const endpoint = operatorEndpoint(
+      destinationType,
+      destination,
+      this.options.pjsipEndpoint,
+    );
+    const query = new URLSearchParams({
+      endpoint,
+      app: this.options.application ?? "teamora-voice",
+      appArgs: `operator,${context.callId}`,
+      channelId,
+      timeout: "20",
+    });
+    try {
+      await this.request(`/channels?${query.toString()}`, { method: "POST" });
+    } catch (error) {
+      if (!(error instanceof AsteriskAriError) || error.status !== 409)
+        throw error;
+      // Recovery after a Gateway restart must attach to the deterministic
+      // existing operator leg instead of creating a second outgoing channel.
+      await this.request(`/channels/${encodeURIComponent(channelId)}`, {
+        method: "GET",
+      });
+    }
+    this.channelContexts.set(channelId, context);
+    return channelId;
+  }
+
+  async provisionWebRtcEndpoint(
+    membershipId: string,
+    username: string,
+    password: string,
+  ): Promise<void> {
+    const expectedUsername = `operator-${membershipId}`;
+    if (username !== expectedUsername || !/^[0-9a-f-]{36}$/i.test(membershipId))
+      throw new Error("Invalid WebRTC operator identity");
+    if (password.length < 32 || password.length > 160)
+      throw new Error("Invalid WebRTC credential length");
+    await this.updateDynamicObject("auth", username, [
+      ["auth_type", "userpass"],
+      ["username", username],
+      ["password", password],
+    ]);
+    await this.updateDynamicObject("aor", username, [
+      ["max_contacts", "1"],
+      ["remove_existing", "yes"],
+      ["support_path", "yes"],
+      ["maximum_expiration", "120"],
+      ["default_expiration", "60"],
+    ]);
+    try {
+      await this.updateDynamicObject("endpoint", username, [
+        ["transport", "transport-webrtc"],
+        ["context", "teamora-operator"],
+        ["disallow", "all"],
+        ["allow", "opus,ulaw"],
+        ["auth", username],
+        ["aors", username],
+        ["webrtc", "yes"],
+        ["direct_media", "no"],
+        ["force_rport", "yes"],
+        ["rewrite_contact", "yes"],
+        ["rtp_symmetric", "yes"],
+      ]);
+    } catch (error) {
+      await this.deleteDynamicObject("aor", username).catch(() => undefined);
+      await this.deleteDynamicObject("auth", username).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async revokeWebRtcEndpoint(membershipId: string): Promise<void> {
+    if (!/^[0-9a-f-]{36}$/i.test(membershipId)) return;
+    const username = `operator-${membershipId}`;
+    await this.deleteDynamicObject("endpoint", username).catch(() => undefined);
+    await this.deleteDynamicObject("aor", username).catch(() => undefined);
+    await this.deleteDynamicObject("auth", username).catch(() => undefined);
+  }
+
+  async cleanupWebRtcEndpoints(): Promise<number> {
+    const endpoints = await this.request("/endpoints", { method: "GET" });
+    if (!Array.isArray(endpoints)) return 0;
+    const operatorIds = endpoints
+      .map((item) => (typeof item.resource === "string" ? item.resource : ""))
+      .filter((resource) => /^operator-[0-9a-f-]{36}$/i.test(resource));
+    await Promise.all(
+      operatorIds.map((resource) =>
+        this.revokeWebRtcEndpoint(resource.replace(/^operator-/, "")),
+      ),
+    );
+    return operatorIds.length;
+  }
+
   async destroyBridge(bridgeId: string): Promise<void> {
     await this.request(`/bridges/${encodeURIComponent(bridgeId)}`, {
       method: "DELETE",
@@ -261,6 +398,7 @@ export class AsteriskAriProvider implements TelephonyProvider {
         headers: {
           authorization: `Basic ${Buffer.from(`${this.options.username}:${this.options.password}`).toString("base64")}`,
           accept: "application/json",
+          ...(init.body ? { "content-type": "application/json" } : {}),
         },
         signal: AbortSignal.timeout(this.options.timeoutMs ?? 5000),
       },
@@ -271,6 +409,32 @@ export class AsteriskAriProvider implements TelephonyProvider {
     if (!contentType.includes("application/json")) return undefined;
     return (await response.json()) as
       Record<string, unknown> | Array<Record<string, unknown>>;
+  }
+
+  private async updateDynamicObject(
+    objectType: "aor" | "auth" | "endpoint",
+    id: string,
+    fields: Array<[string, string]>,
+  ): Promise<void> {
+    await this.request(
+      `/asterisk/config/dynamic/res_pjsip/${objectType}/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          fields: fields.map(([attribute, value]) => ({ attribute, value })),
+        }),
+      },
+    );
+  }
+
+  private async deleteDynamicObject(
+    objectType: "aor" | "auth" | "endpoint",
+    id: string,
+  ): Promise<void> {
+    await this.request(
+      `/asterisk/config/dynamic/res_pjsip/${objectType}/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 }
 
@@ -291,6 +455,26 @@ function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim())
     throw new Error(`${name} is required`);
   return value;
+}
+
+function operatorEndpoint(
+  type: "browser" | "sip" | "mobile",
+  destination: string,
+  trunk?: string,
+): string {
+  if (type === "browser") {
+    const match = /^webrtc:([0-9a-f-]{36})$/i.exec(destination);
+    if (!match) throw new Error("Invalid browser operator destination");
+    return `PJSIP/operator-${match[1]}`;
+  }
+  if (type === "sip") {
+    const match = /^sip:([0-9*#-]{1,32})$/.exec(destination);
+    if (!match) throw new Error("Invalid SIP operator destination");
+    return `PJSIP/${match[1]}`;
+  }
+  if (!/^\+[1-9][0-9]{7,14}$/.test(destination) || !trunk)
+    throw new Error("Invalid mobile operator destination");
+  return `PJSIP/${destination}@${trunk}`;
 }
 
 function normalizeAriState(state: string): TelephonyCallState {

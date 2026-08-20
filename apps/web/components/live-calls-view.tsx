@@ -5,7 +5,7 @@ import { Radio } from "lucide-react";
 import Link from "next/link";
 import { StatusBadge } from "@teamora/ui";
 import { apiRequest } from "@/lib/api";
-import type { AIRealtimeSession, Call } from "@/lib/types";
+import type { AIRealtimeSession, Call, LiveTransfer } from "@/lib/types";
 import { QueryError, SectionSkeleton } from "@/components/query-state";
 import { useRealtime } from "@/components/realtime-provider";
 
@@ -29,8 +29,16 @@ export function LiveCallsView() {
       apiRequest<AIRealtimeSession[]>("/ai-realtime/sessions/active"),
     refetchInterval: realtime.connected ? 60_000 : 15_000,
   });
+  const transfers = useQuery({
+    queryKey: ["transfers", "live-calls"],
+    queryFn: () => apiRequest<LiveTransfer[]>("/transfers"),
+    refetchInterval: realtime.connected ? 60_000 : 15_000,
+  });
   const aiByCall = new Map(
     (aiSessions.data ?? []).map((session) => [session.call_id, session]),
+  );
+  const transferByCall = new Map(
+    (transfers.data ?? []).map((transfer) => [transfer.call_id, transfer]),
   );
 
   if (calls.isPending) return <SectionSkeleton />;
@@ -79,12 +87,14 @@ export function LiveCallsView() {
                   <th>Язык</th>
                   <th>Статус</th>
                   <th>Voice AI</th>
+                  <th>Перевод</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
                 {calls.data.map((call) => {
                   const ai = aiByCall.get(call.id);
+                  const transfer = transferByCall.get(call.id);
                   return (
                     <tr key={call.id}>
                       <td>
@@ -121,6 +131,24 @@ export function LiveCallsView() {
                                 ? ` · TTFA ${Math.round(ai.latency.first_audio_latency_ms)} мс`
                                 : ""}
                             </small>
+                          </div>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>
+                        {transfer ? (
+                          <div className="ai-call-state">
+                            <StatusBadge
+                              tone={
+                                transfer.status === "connected"
+                                  ? "success"
+                                  : "warning"
+                              }
+                            >
+                              {transfer.status}
+                            </StatusBadge>
+                            <small>{transfer.reason}</small>
                           </div>
                         ) : (
                           "—"

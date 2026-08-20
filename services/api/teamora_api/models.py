@@ -2369,8 +2369,17 @@ class TelephonyChannelReservation(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
             ondelete="CASCADE",
         ),
         UniqueConstraint("tenant_id", "id", name="uq_telephony_reservations_tenant_id"),
-        UniqueConstraint("tenant_id", "call_id", name="uq_telephony_reservations_tenant_call"),
+        UniqueConstraint(
+            "tenant_id",
+            "call_id",
+            "purpose",
+            name="uq_telephony_reservations_tenant_call_purpose",
+        ),
         CheckConstraint("direction IN ('inbound', 'outbound')", name="telephony_reservation_direction_valid"),
+        CheckConstraint(
+            "purpose IN ('customer_leg', 'operator_transfer')",
+            name="telephony_reservation_purpose_valid",
+        ),
         CheckConstraint(
             "status IN ('reserved', 'released', 'lost')",
             name="telephony_reservation_status_valid",
@@ -2389,6 +2398,7 @@ class TelephonyChannelReservation(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     sip_trunk_id: Mapped[UUID] = mapped_column(index=True)
     call_id: Mapped[UUID] = mapped_column(index=True)
     direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(24), default="customer_leg", nullable=False)
     pool_key: Mapped[str] = mapped_column(String(24), default="shared", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="reserved", nullable=False, index=True)
     provider_channel_id: Mapped[str | None] = mapped_column(String(200), index=True)
@@ -3006,10 +3016,49 @@ class QueueMember(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
 class TransferRequest(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     __tablename__ = "transfer_requests"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_transfer_requests_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "call_id"],
+            ["calls.tenant_id", "calls.id"],
+            name="fk_transfer_requests_tenant_call",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "claimed_membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_transfer_requests_tenant_claimed_membership",
+            ondelete="SET NULL",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_transfer_requests_tenant_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_transfer_requests_tenant_idempotency",
+        ),
+        CheckConstraint("lock_version >= 1", name="transfer_request_lock_version_positive"),
+        CheckConstraint("attempt_count >= 0", name="attempt_count_non_negative"),
+        CheckConstraint("max_attempts > 0", name="transfer_request_max_attempts_positive"),
+        CheckConstraint(
+            "destination_type IN ('browser','sip','mobile')",
+            name="transfer_request_destination_type_valid",
+        ),
         Index("ix_transfer_requests_tenant_status_requested", "tenant_id", "status", "requested_at"),
+        Index(
+            "ix_transfer_requests_project_status_expiry",
+            "tenant_id",
+            "project_id",
+            "status",
+            "offer_expires_at",
+        ),
     )
 
-    call_id: Mapped[UUID] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    call_id: Mapped[UUID] = mapped_column(index=True)
     queue_id: Mapped[UUID | None] = mapped_column(ForeignKey("operator_queues.id", ondelete="SET NULL"))
     assigned_operator_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("human_operators.id", ondelete="SET NULL")
@@ -3019,8 +3068,111 @@ class TransferRequest(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
     )
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="")
+    language_code: Mapped[str] = mapped_column(String(32), default="ru", nullable=False)
+    routing_strategy: Mapped[str] = mapped_column(String(40), default="longest_idle", nullable=False)
+    destination_type: Mapped[str] = mapped_column(String(16), default="browser", nullable=False)
+    claimed_membership_id: Mapped[UUID | None] = mapped_column(index=True)
+    context_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    offer_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(80))
+    operator_channel_id: Mapped[str | None] = mapped_column(String(200))
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TransferAttempt(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "transfer_attempts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_transfer_attempts_tenant_project",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "transfer_request_id"],
+            ["transfer_requests.tenant_id", "transfer_requests.id"],
+            name="fk_transfer_attempts_tenant_request",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_transfer_attempts_tenant_membership",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "transfer_request_id",
+            "attempt_number",
+            name="uq_transfer_attempts_request_number",
+        ),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_transfer_attempts_idempotency"),
+        CheckConstraint("attempt_number > 0", name="transfer_attempt_number_positive"),
+        Index(
+            "ix_transfer_attempts_member_status",
+            "tenant_id",
+            "membership_id",
+            "status",
+            "offered_at",
+        ),
+    )
+
+    project_id: Mapped[UUID] = mapped_column(index=True)
+    transfer_request_id: Mapped[UUID] = mapped_column(index=True)
+    membership_id: Mapped[UUID] = mapped_column(index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    destination_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    destination_ref: Mapped[str | None] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(24), default="offered", nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    offered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_channel_id: Mapped[str | None] = mapped_column(String(200))
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+
+
+class OperatorTransferEndpoint(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):
+    __tablename__ = "operator_transfer_endpoints"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_operator_transfer_endpoints_tenant_membership",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "membership_id",
+            "endpoint_type",
+            name="uq_operator_transfer_endpoints_member_type",
+        ),
+        CheckConstraint(
+            "endpoint_type IN ('browser','sip','mobile')",
+            name="endpoint_type_valid",
+        ),
+        CheckConstraint(
+            "lock_version >= 1",
+            name="lock_version_positive",
+        ),
+    )
+
+    membership_id: Mapped[UUID] = mapped_column(index=True)
+    endpoint_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    destination: Mapped[str] = mapped_column(String(160), nullable=False)
+    display_hint: Mapped[str] = mapped_column(String(80), nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 
 class Integration(UUIDPrimaryKeyMixin, TenantOwnedMixin, Base):

@@ -107,6 +107,18 @@ const ariListener =
         voiceRuntime,
       )
     : undefined;
+if (telephonyProvider) {
+  try {
+    const removed = await telephonyProvider.cleanupWebRtcEndpoints();
+    if (removed)
+      logger.info({ removed }, "expired WebRTC endpoints reconciled");
+  } catch (error) {
+    logger.warn(
+      { code: error instanceof Error ? error.name : "webrtc_cleanup_error" },
+      "WebRTC endpoint reconciliation deferred",
+    );
+  }
+}
 ariListener?.start();
 const handleInternalRequest = createGatewayRequestHandler({
   serviceToken: config.GATEWAY_SERVICE_TOKEN,
@@ -117,6 +129,8 @@ const handleInternalRequest = createGatewayRequestHandler({
   ...(telephonyProvider ? { provider: telephonyProvider } : {}),
   ...(mediaAdapter ? { mediaAdapter } : {}),
   runRealtimeDiagnostic: runLocalAiDiagnostic,
+  ...(ariListener ? { handoffController: ariListener } : {}),
+  ...(telephonyProvider ? { webRtcProvisioner: telephonyProvider } : {}),
 });
 let shuttingDown = false;
 
@@ -139,6 +153,14 @@ const server = createServer(async (request, response) => {
     response.end(
       JSON.stringify({
         status: shuttingDown ? "stopping" : "ready",
+        telephony_deployment: config.TELEPHONY_SIP_ARCHITECTURE,
+        media_gateway_placement: config.TELEPHONY_MEDIA_GATEWAY_PLACEMENT,
+        edge_connectivity:
+          config.TELEPHONY_SIP_ARCHITECTURE === "direct"
+            ? "not_applicable"
+            : config.TELEPHONY_EDGE_TUNNEL_ENABLED
+              ? "configured_live_verification_required"
+              : "not_configured",
         openai_realtime: realtimeProvider
           ? config.OPENAI_REALTIME_PROVIDER === "mock"
             ? "mock_local_verification_available"

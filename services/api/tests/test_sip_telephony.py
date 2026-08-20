@@ -36,6 +36,7 @@ from teamora_api.telephony.control import (
     finalize_cdr,
     mask_number,
     release_call_channel,
+    release_transfer_channel,
     reserve_channel,
 )
 
@@ -145,6 +146,83 @@ async def test_channel_limit_reservation_release_and_masked_cdr(
         assert cdr.billable_duration_seconds is None
         assert cdr.codec == "ulaw"
         assert cdr.safe_provider_metadata == {}
+
+
+async def test_mobile_transfer_atomically_reserves_and_releases_second_channel(
+    client: AsyncClient, unique_suffix: str, register: object
+) -> None:
+    auth, _csrf = await register(client, f"transfer-channel-{unique_suffix}")  # type: ignore[operator]
+    tenant_id = UUID(str(auth["tenant"]["id"]))
+    project = await _default_project(tenant_id)
+    async with SessionFactory.begin() as session:
+        await set_tenant_context(session, tenant_id)
+        trunk = SipTrunk(
+            tenant_id=tenant_id,
+            name="Two channel transfer trunk",
+            provider_host="sip-emulator",
+            provider_port=5060,
+            transport="udp",
+            auth_mode="ip",
+            allowed_ips=["127.0.0.0/8"],
+            codecs=["ulaw"],
+            dtmf_mode="rfc4733",
+            max_channels=2,
+            status=IntegrationStatus.CONFIGURED,
+        )
+        call = _call(
+            tenant_id=tenant_id,
+            project_id=project.id,
+            direction=CallDirection.INBOUND,
+        )
+        competing = _call(
+            tenant_id=tenant_id,
+            project_id=project.id,
+            direction=CallDirection.OUTBOUND,
+        )
+        session.add_all([trunk, call, competing])
+        await session.flush()
+
+        customer_leg = await reserve_channel(
+            session,
+            call=call,
+            trunk_id=trunk.id,
+            direction=CallDirection.INBOUND,
+        )
+        operator_leg = await reserve_channel(
+            session,
+            call=call,
+            trunk_id=trunk.id,
+            direction=CallDirection.OUTBOUND,
+            purpose="operator_transfer",
+        )
+        replay = await reserve_channel(
+            session,
+            call=call,
+            trunk_id=trunk.id,
+            direction=CallDirection.OUTBOUND,
+            purpose="operator_transfer",
+        )
+        assert replay.id == operator_leg.id
+        assert customer_leg.id != operator_leg.id
+        with pytest.raises(ApiError) as exhausted:
+            await reserve_channel(
+                session,
+                call=competing,
+                trunk_id=trunk.id,
+                direction=CallDirection.OUTBOUND,
+            )
+        assert exhausted.value.code == "sip_channel_limit"
+
+        await release_transfer_channel(session, call=call, reason="operator_no_answer")
+        replacement = await reserve_channel(
+            session,
+            call=competing,
+            trunk_id=trunk.id,
+            direction=CallDirection.OUTBOUND,
+        )
+        assert operator_leg.status == "released"
+        assert customer_leg.status == "reserved"
+        assert replacement.status == "reserved"
 
 
 def _signature(secret: str, webhook_id: str, timestamp: str, payload: bytes) -> str:
@@ -325,6 +403,10 @@ async def test_telephony_status_is_tenant_scoped(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "configured"
+    assert body["deployment_mode"] == "direct"
+    assert body["media_gateway_placement"] == "platform"
+    assert body["edge_connectivity"] == "not_applicable"
+    assert body["browser_webrtc"] == "configured_live_verification_required"
     assert body["live_signaling_verified"] is False
     assert body["live_audio_verified"] is False
     assert body["channel_usage"][0]["occupied"] == 0

@@ -119,7 +119,7 @@ class SipServer(asyncio.DatagramProtocol):
                 message,
                 "200 OK",
                 body=body,
-                extra="Contact: <sip:emulator@127.0.0.1:5060>",
+                extra="Contact: <sip:emulator@sip-emulator:5060>",
             ),
             address,
         )
@@ -175,7 +175,7 @@ class UdpClient:
         return self.sock.recvfrom(65535)[0].decode(errors="replace")
 
 
-def inbound(target: str, did: str) -> int:
+def inbound(target: str, did: str, hold_seconds: float = 0) -> int:
     host, port_text = target.rsplit(":", 1)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", 0))
@@ -287,6 +287,40 @@ def inbound(target: str, did: str) -> int:
                 f"two-way RTP verified: sent={packet_count}, received={received}",
                 flush=True,
             )
+            if hold_seconds > 0:
+                # Give the transfer orchestration time to remove External Media,
+                # attach the operator emulator and then prove media through the
+                # new operator leg with a payload the Mock AI never generates.
+                settle = min(5.0, hold_seconds / 2)
+                time.sleep(settle)
+                operator_payload = bytes((0x55,)) * 160
+                operator_received = 0
+                rtp_sock.settimeout(0.05)
+                phase_deadline = time.time() + max(1.0, hold_seconds - settle)
+                sequence = packet_count + len(dtmf_packets)
+                while time.time() < phase_deadline:
+                    rtp_sock.sendto(
+                        rtp_packet(0, sequence, ssrc, operator_payload), remote_rtp
+                    )
+                    sequence += 1
+                    try:
+                        packet = rtp_sock.recvfrom(2048)[0]
+                    except TimeoutError:
+                        continue
+                    if len(packet) >= 172 and packet[12:172] == operator_payload:
+                        operator_received += 1
+                        if operator_received >= 5:
+                            break
+                if operator_received < 5:
+                    print(
+                        "operator media failed: post-transfer RTP echo was not received",
+                        file=sys.stderr,
+                    )
+                    return 1
+                print(
+                    f"operator two-way RTP verified: received={operator_received}",
+                    flush=True,
+                )
             bye_branch = f"z9hG4bK-bye-{random.getrandbits(32):x}"
             bye = (
                 f"BYE sip:{did}@{host} SIP/2.0\r\n"
@@ -344,6 +378,7 @@ def main() -> int:
     inbound_parser = subparsers.add_parser("inbound")
     inbound_parser.add_argument("--target", default="asterisk:5060")
     inbound_parser.add_argument("--did", required=True)
+    inbound_parser.add_argument("--hold-seconds", type=float, default=0)
     health_parser = subparsers.add_parser("health")
     health_parser.add_argument("--target", default="127.0.0.1:5060")
     args = parser.parse_args()
@@ -352,7 +387,7 @@ def main() -> int:
         return 0
     if args.mode == "health":
         return health(args.target)
-    return inbound(args.target, args.did)
+    return inbound(args.target, args.did, args.hold_seconds)
 
 
 if __name__ == "__main__":

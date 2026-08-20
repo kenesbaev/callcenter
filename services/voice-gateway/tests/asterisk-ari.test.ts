@@ -110,4 +110,88 @@ describe("AsteriskAriProvider", () => {
       expect.stringContaining("/ari/bridges/teamora-bridge-call-id"),
     ]);
   });
+
+  it("creates an allowlisted operator leg and never treats ARI acceptance as completed", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const provider = new AsteriskAriProvider({
+      baseUrl: "http://ari.local:8088",
+      username: "ari-user",
+      password: "ari-secret",
+      externalHost: "gateway.internal:60000",
+      pjsipEndpoint: "provider-endpoint",
+      fetchImplementation: fetchMock as typeof fetch,
+    });
+    const channel = await provider.originateOperatorLeg(
+      context,
+      "browser",
+      "webrtc:10000000-0000-4000-8000-000000000099",
+    );
+    expect(channel).toBe(`teamora-operator-${context.callId}`);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "endpoint=PJSIP%2Foperator-10000000-0000-4000-8000-000000000099",
+    );
+    await expect(
+      provider.originateOperatorLeg(context, "mobile", "+99912345678"),
+    ).resolves.toBe(channel);
+    await expect(
+      provider.originateOperatorLeg(context, "mobile", "premium-number"),
+    ).rejects.toThrow("Invalid mobile operator destination");
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("ari-secret");
+  });
+
+  it("provisions and revokes an ephemeral browser endpoint through ARI push config", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImplementation = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        calls.push(
+          init ? { url: String(input), init } : { url: String(input) },
+        );
+        return new Response(null, { status: 204 });
+      },
+    ) as typeof fetch;
+    const provider = new AsteriskAriProvider({
+      baseUrl: "http://ari.local:8088",
+      username: "ari-user",
+      password: "ari-secret",
+      externalHost: "gateway.internal:60000",
+      fetchImplementation,
+    });
+    const membershipId = "10000000-0000-4000-8000-000000000099";
+    const username = `operator-${membershipId}`;
+    const password = "ephemeral-operator-password-with-safe-length";
+    await provider.provisionWebRtcEndpoint(membershipId, username, password);
+    await provider.revokeWebRtcEndpoint(membershipId);
+
+    expect(calls.map(({ url }) => url)).toEqual([
+      expect.stringContaining(
+        `/asterisk/config/dynamic/res_pjsip/auth/${username}`,
+      ),
+      expect.stringContaining(
+        `/asterisk/config/dynamic/res_pjsip/aor/${username}`,
+      ),
+      expect.stringContaining(
+        `/asterisk/config/dynamic/res_pjsip/endpoint/${username}`,
+      ),
+      expect.stringContaining(
+        `/asterisk/config/dynamic/res_pjsip/endpoint/${username}`,
+      ),
+      expect.stringContaining(
+        `/asterisk/config/dynamic/res_pjsip/aor/${username}`,
+      ),
+      expect.stringContaining(
+        `/asterisk/config/dynamic/res_pjsip/auth/${username}`,
+      ),
+    ]);
+    expect(calls.slice(0, 3).every(({ init }) => init?.method === "PUT")).toBe(
+      true,
+    );
+    expect(calls.slice(3).every(({ init }) => init?.method === "DELETE")).toBe(
+      true,
+    );
+    expect(calls[2]?.init?.body).toContain('"attribute":"webrtc"');
+    expect(JSON.stringify(calls.map(({ url }) => url))).not.toContain(password);
+  });
 });

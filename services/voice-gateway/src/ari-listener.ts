@@ -48,6 +48,8 @@ export class AsteriskAriListener {
   private readonly recordingCalls = new Set<string>();
   private readonly bridgeByCall = new Map<string, string>();
   private readonly mediaByCall = new Map<string, string>();
+  private readonly operatorByCall = new Map<string, string>();
+  private readonly connectedOperatorCalls = new Set<string>();
 
   constructor(
     private readonly options: AriListenerOptions,
@@ -84,6 +86,74 @@ export class AsteriskAriListener {
     return this.socket?.readyState === WebSocket.OPEN
       ? "connected"
       : "reconnecting";
+  }
+
+  async dialOperator(input: {
+    tenantId: string;
+    projectId: string;
+    callId: string;
+    destinationType: "browser" | "sip" | "mobile";
+    destination: string;
+    correlationId: string;
+  }): Promise<{ status: "connecting"; operatorChannelId: string }> {
+    const context = this.contextsByCall.get(input.callId);
+    const bridgeId = this.bridgeByCall.get(input.callId);
+    if (
+      !context ||
+      context.tenantId !== input.tenantId ||
+      context.projectId !== input.projectId ||
+      !bridgeId
+    ) {
+      throw new Error("Live call bridge was not found");
+    }
+    const existing = this.operatorByCall.get(input.callId);
+    if (existing) return { status: "connecting", operatorChannelId: existing };
+    await this.voiceRuntime?.prepareHandoff(input.callId);
+    await this.provider.startMoh(bridgeId);
+    try {
+      const operatorChannelId = await this.provider.originateOperatorLeg(
+        { ...context, correlationId: input.correlationId },
+        input.destinationType,
+        input.destination,
+      );
+      this.operatorByCall.set(input.callId, operatorChannelId);
+      this.callContexts.set(operatorChannelId, context);
+      await this.publish(
+        context,
+        { type: "OperatorDial", timestamp: new Date().toISOString() },
+        "transfer.started",
+        { operatorChannelId },
+      );
+      return { status: "connecting", operatorChannelId };
+    } catch (error) {
+      await this.provider.stopMoh(bridgeId).catch(() => undefined);
+      await this.voiceRuntime?.resumeAfterHandoff(input.callId);
+      throw error;
+    }
+  }
+
+  async cancelOperator(callId: string, reason: string): Promise<void> {
+    const context = this.contextsByCall.get(callId);
+    const operatorChannelId = this.operatorByCall.get(callId);
+    const bridgeId = this.bridgeByCall.get(callId);
+    if (operatorChannelId) {
+      await this.provider
+        .hangupChannel(operatorChannelId)
+        .catch(() => undefined);
+      this.operatorByCall.delete(callId);
+      this.callContexts.delete(operatorChannelId);
+      this.provider.forgetChannel(operatorChannelId);
+    }
+    if (bridgeId) await this.provider.stopMoh(bridgeId).catch(() => undefined);
+    await this.voiceRuntime?.resumeAfterHandoff(callId);
+    if (context) {
+      await this.publish(
+        context,
+        { type: "OperatorDialFailed", timestamp: new Date().toISOString() },
+        "transfer.failed",
+        { cause: safeCause(reason) },
+      );
+    }
   }
 
   private connect(): void {
@@ -146,6 +216,7 @@ export class AsteriskAriListener {
         this.contextForRecording(event.recording?.name));
     if (!context) return;
     if (type === "ChannelStateChange") {
+      if (channelId === this.operatorByCall.get(context.callId)) return;
       const state = (event.channel?.state ?? "").toLowerCase();
       if (state === "up")
         await this.publish(context, event, "call.answered", {
@@ -178,6 +249,17 @@ export class AsteriskAriListener {
       return;
     }
     if (type === "StasisEnd" || type === "ChannelDestroyed") {
+      if (channelId === this.operatorByCall.get(context.callId)) {
+        if (this.connectedOperatorCalls.has(context.callId)) {
+          await this.publish(context, event, "call.hangup", {
+            rawCause: safeCause(event.cause_txt),
+          });
+          await this.cleanup(context, channelId);
+          return;
+        }
+        await this.cancelOperator(context.callId, "operator_leg_ended");
+        return;
+      }
       await this.publish(context, event, "call.hangup", {
         rawCause: safeCause(event.cause_txt),
       });
@@ -190,6 +272,39 @@ export class AsteriskAriListener {
     channelId: string,
   ): Promise<void> {
     const args = event.args ?? [];
+    if (args[0] === "operator") {
+      const callId = args[1] ?? "";
+      const context = this.contextsByCall.get(callId);
+      const bridgeId = this.bridgeByCall.get(callId);
+      if (
+        !context ||
+        !bridgeId ||
+        this.operatorByCall.get(callId) !== channelId
+      ) {
+        await this.provider.hangupChannel(channelId).catch(() => undefined);
+        return;
+      }
+      await this.provider.addChannelToBridge(bridgeId, channelId);
+      await this.provider.stopMoh(bridgeId).catch(() => undefined);
+      const mediaId = this.mediaByCall.get(callId);
+      if (mediaId) {
+        await this.provider
+          .removeChannelFromBridge(bridgeId, mediaId)
+          .catch(() => undefined);
+      }
+      await this.voiceRuntime?.stop(callId, "human_handoff_connected");
+      if (mediaId) {
+        this.callContexts.delete(mediaId);
+        this.provider.forgetChannel(mediaId);
+        await this.provider.hangupChannel(mediaId).catch(() => undefined);
+        this.mediaByCall.delete(callId);
+      }
+      this.connectedOperatorCalls.add(callId);
+      await this.publish(context, event, "transfer.completed", {
+        operatorChannelId: channelId,
+      });
+      return;
+    }
     const existing = this.provider.contextForChannel(channelId);
     if (existing) {
       this.callContexts.set(channelId, existing);
@@ -307,7 +422,15 @@ export class AsteriskAriListener {
   ): Promise<void> {
     const bridgeId = this.bridgeByCall.get(context.callId);
     const mediaId = this.mediaByCall.get(context.callId);
+    const operatorChannelId = this.operatorByCall.get(context.callId);
     await this.voiceRuntime?.stop(context.callId, "telephony_cleanup");
+    if (operatorChannelId && operatorChannelId !== channelId) {
+      await this.provider
+        .hangupChannel(operatorChannelId)
+        .catch(() => undefined);
+      this.callContexts.delete(operatorChannelId);
+      this.provider.forgetChannel(operatorChannelId);
+    }
     if (mediaId) {
       await this.provider
         .request(`/channels/${encodeURIComponent(mediaId)}`, {
@@ -336,6 +459,8 @@ export class AsteriskAriListener {
     }
     this.bridgeByCall.delete(context.callId);
     this.mediaByCall.delete(context.callId);
+    this.operatorByCall.delete(context.callId);
+    this.connectedOperatorCalls.delete(context.callId);
     if (!this.recordingCalls.has(context.callId)) {
       this.contextsByCall.delete(context.callId);
     }

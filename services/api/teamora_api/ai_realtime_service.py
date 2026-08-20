@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from teamora_api.call_events import append_call_event
 from teamora_api.call_flow_service import definition_from_storage, localized
-from teamora_api.config import Settings
+from teamora_api.config import Settings, get_settings
 from teamora_api.customer_service import validate_custom_field_value
 from teamora_api.dependencies import Principal
 from teamora_api.dialer_flow_service import advance_execution
@@ -23,7 +23,6 @@ from teamora_api.enums import (
     TaskType,
     ToolExecutionStatus,
     TranscriptSpeaker,
-    TransferStatus,
 )
 from teamora_api.errors import ApiError
 from teamora_api.knowledge_service import hybrid_retrieve
@@ -41,7 +40,6 @@ from teamora_api.models import (
     Tenant,
     ToolExecution,
     TranscriptSegment,
-    TransferRequest,
     UsageRecord,
     User,
 )
@@ -56,6 +54,7 @@ from teamora_api.schemas.ai_realtime import (
 from teamora_api.schemas.call_flows import normalize_language_code
 from teamora_api.schemas.dialer import DialerFlowStepRequest
 from teamora_api.task_service import create_task_record
+from teamora_api.transfer_service import request_transfer
 
 SESSION_STATES = {
     "ai.session_connecting": "connecting",
@@ -441,24 +440,21 @@ async def ingest_event(
     elif event.event_type == "ai.response_completed":
         realtime.latency_snapshot = {**realtime.latency_snapshot, **event.safe_payload}
     elif event.event_type == "transfer.requested":
-        existing_transfer = await session.scalar(
-            select(TransferRequest).where(
-                TransferRequest.tenant_id == realtime.tenant_id,
-                TransferRequest.call_id == realtime.call_id,
-                TransferRequest.status == TransferStatus.REQUESTED,
-            )
+        call = await session.scalar(
+            select(Call).where(Call.tenant_id == realtime.tenant_id, Call.id == realtime.call_id)
         )
-        if existing_transfer is None:
+        if call is not None:
             reason = str(event.safe_payload.get("reason") or "ai_provider_unavailable")[:500]
-            session.add(
-                TransferRequest(
-                    tenant_id=realtime.tenant_id,
-                    call_id=realtime.call_id,
-                    status=TransferStatus.REQUESTED,
-                    reason=reason,
-                    summary="AI voice fallback requested human assistance",
-                    requested_at=occurred_at,
-                )
+            await request_transfer(
+                session,
+                call=call,
+                reason=reason,
+                summary="AI voice fallback requested human assistance",
+                destination_type="browser",
+                idempotency_key=f"ai-event:{event.provider_event_id}",
+                correlation_id=event.correlation_id,
+                actor_user_id=None,
+                settings=get_settings(),
             )
     if event.event_type == "ai.transcript_updated" and bool(event.safe_payload.get("final")):
         await _persist_transcript(session, realtime, event)
@@ -708,24 +704,23 @@ async def _dispatch_tool(
     if request.name in {"request_human_transfer", "end_conversation"}:
         reason = str(request.arguments.get("reason") or "ai_requested")[:500]
         if request.name == "request_human_transfer":
-            existing = await session.scalar(
-                select(TransferRequest).where(
-                    TransferRequest.tenant_id == call.tenant_id,
-                    TransferRequest.call_id == call.id,
-                    TransferRequest.status == TransferStatus.REQUESTED,
-                )
+            transfer = await request_transfer(
+                session,
+                call=call,
+                reason=reason,
+                summary="AI requested human assistance",
+                destination_type="browser",
+                idempotency_key=request.idempotency_key,
+                correlation_id=request.correlation_id,
+                actor_user_id=None,
+                settings=settings,
             )
-            if existing is None:
-                existing = TransferRequest(
-                    tenant_id=call.tenant_id,
-                    call_id=call.id,
-                    status=TransferStatus.REQUESTED,
-                    reason=reason,
-                    summary="AI requested human assistance",
-                    requested_at=datetime.now(UTC),
-                )
-                session.add(existing)
-            return {"ok": True, "transfer_requested": True, "transfer_executed": False}
+            return {
+                "ok": True,
+                "transfer_requested": True,
+                "transfer_request_id": str(transfer.id),
+                "transfer_executed": False,
+            }
         return {"ok": True, "end_requested": True}
     raise ApiError(
         409,

@@ -17,6 +17,7 @@ from teamora_api.enums import (
     LanguageCode,
     TaskPriority,
     TranscriptSpeaker,
+    TransferStatus,
 )
 
 
@@ -86,9 +87,19 @@ class CallRead(BaseModel):
     is_demo: bool
 
 
+class CallTransferSummaryRead(BaseModel):
+    id: UUID
+    status: TransferStatus
+    reason: str
+    requested_at: datetime
+    connected_at: datetime | None
+    resolved_at: datetime | None
+
+
 class CallDetail(CallRead):
     transcript: list[TranscriptSegmentRead]
     summary: CallSummaryRead | None
+    transfers: list[CallTransferSummaryRead] = Field(default_factory=list)
 
 
 class CallStartRequest(BaseModel):

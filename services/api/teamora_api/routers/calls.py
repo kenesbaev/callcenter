@@ -49,6 +49,7 @@ from teamora_api.models import (
     HumanOperator,
     TenantSettings,
     TranscriptSegment,
+    TransferRequest,
 )
 from teamora_api.project_access import resolve_project
 from teamora_api.realtime import enqueue_analytics_invalidation, enqueue_realtime_event
@@ -60,6 +61,7 @@ from teamora_api.schemas.calls import (
     CallResultResponse,
     CallStartRequest,
     CallSummaryRead,
+    CallTransferSummaryRead,
     TranscriptSegmentRead,
 )
 from teamora_api.schemas.common import Page
@@ -1242,6 +1244,16 @@ async def get_call(
             CallSummary.tenant_id == principal.tenant_id, CallSummary.call_id == call.id
         )
     )
+    transfers = list(
+        await session.scalars(
+            select(TransferRequest)
+            .where(
+                TransferRequest.tenant_id == principal.tenant_id,
+                TransferRequest.call_id == call.id,
+            )
+            .order_by(TransferRequest.requested_at)
+        )
+    )
     base = serialize_call(call).model_dump()
     return CallDetail(
         **base,
@@ -1270,4 +1282,15 @@ async def get_call(
             if summary
             else None
         ),
+        transfers=[
+            CallTransferSummaryRead(
+                id=transfer.id,
+                status=transfer.status,
+                reason=transfer.reason,
+                requested_at=transfer.requested_at,
+                connected_at=transfer.connected_at,
+                resolved_at=transfer.resolved_at,
+            )
+            for transfer in transfers
+        ],
     )

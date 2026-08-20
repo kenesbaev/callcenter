@@ -54,8 +54,9 @@ def require(response: httpx.Response, expected: int) -> dict[str, object]:
     return response.json()
 
 
-async def register_workspace(suffix: str) -> tuple[UUID, str, str, str]:
+async def register_workspace(suffix: str) -> tuple[UUID, str, str, str, str, str]:
     slug = f"telephony-e2e-voice-{suffix}"
+    email = f"voice-e2e-{suffix}@example.com"
     password = f"LocalOnly-1-{secrets.token_urlsafe(18)}"
     async with httpx.AsyncClient(base_url=API_URL, timeout=20) as client:
         auth = require(
@@ -65,7 +66,7 @@ async def register_workspace(suffix: str) -> tuple[UUID, str, str, str]:
                     "company_name": f"Voice E2E {suffix}",
                     "company_slug": slug,
                     "display_name": "Voice E2E Owner",
-                    "email": f"voice-e2e-{suffix}@example.com",
+                    "email": email,
                     "password": password,
                 },
             ),
@@ -244,7 +245,7 @@ async def register_workspace(suffix: str) -> tuple[UUID, str, str, str]:
     assert published_operator["active_version_id"]
     assert published_flow["id"]
     assert published_knowledge["id"]
-    return tenant_id, slug, project_id, str(customer["id"])
+    return tenant_id, slug, project_id, str(customer["id"]), email, password
 
 
 async def enable_disclosure(tenant_id: UUID, project_id: UUID) -> None:
@@ -441,6 +442,8 @@ async def run() -> None:
             primary_slug,
             project_text,
             customer_id,
+            _primary_email,
+            _primary_password,
         ) = await register_workspace(suffix)
         project_id = await configure_route(primary_tenant, did)
         if str(project_id) != project_text:
@@ -451,6 +454,8 @@ async def run() -> None:
             decoy_slug,
             _decoy_project,
             _decoy_customer,
+            _decoy_email,
+            _decoy_password,
         ) = await register_workspace(f"{suffix}-decoy")
         run_local_call(did)
         call_id = await verify_voice_result(

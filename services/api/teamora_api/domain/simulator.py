@@ -347,10 +347,19 @@ async def add_simulated_message(
         session.add(
             TransferRequest(
                 tenant_id=tenant_id,
+                project_id=call.project_id,
                 call_id=call.id,
                 status=TransferStatus.REQUESTED,
                 reason=str(safe_result["reason"]),
                 summary="Development simulator transfer request",
+                language_code=(call.language.value if call.language else "ru"),
+                routing_strategy="longest_idle",
+                destination_type="browser",
+                context_snapshot={"simulator": True},
+                attempt_count=0,
+                max_attempts=3,
+                idempotency_key=f"simulator-transfer:{call.id}",
+                lock_version=1,
                 requested_at=datetime.now(UTC),
             )
         )

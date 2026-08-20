@@ -32,6 +32,53 @@ const localMediaTestSchema = z
     packets: z.number().int().min(10).max(500),
   })
   .strict();
+const transferDialSchema = z
+  .object({
+    tenantId: z.uuid(),
+    projectId: z.uuid(),
+    callId: z.uuid(),
+    transferRequestId: z.uuid(),
+    destinationType: z.enum(["browser", "sip", "mobile"]),
+    destination: z.string().min(2).max(160),
+    idempotencyKey: z.string().min(8).max(160),
+  })
+  .strict();
+const transferCancelSchema = z
+  .object({
+    callId: z.uuid(),
+    reason: z.string().min(2).max(120),
+    idempotencyKey: z.string().min(8).max(160),
+  })
+  .strict();
+const webRtcProvisionSchema = z
+  .object({
+    membershipId: z.uuid(),
+    username: z.string().regex(/^operator-[0-9a-f-]{36}$/i),
+    password: z.string().min(32).max(160),
+    ttlSeconds: z.number().int().min(30).max(120),
+  })
+  .strict();
+
+export type OperatorHandoffController = {
+  dialOperator(input: {
+    tenantId: string;
+    projectId: string;
+    callId: string;
+    destinationType: "browser" | "sip" | "mobile";
+    destination: string;
+    correlationId: string;
+  }): Promise<{ status: "connecting"; operatorChannelId: string }>;
+  cancelOperator(callId: string, reason: string): Promise<void>;
+};
+
+export type WebRtcProvisioningController = {
+  provisionWebRtcEndpoint(
+    membershipId: string,
+    username: string,
+    password: string,
+  ): Promise<void>;
+  revokeWebRtcEndpoint(membershipId: string): Promise<void>;
+};
 
 export type GatewayInternalApiOptions = {
   serviceToken: string;
@@ -42,17 +89,22 @@ export type GatewayInternalApiOptions = {
   runRealtimeDiagnostic?: () => Promise<
     Record<string, string | number | boolean>
   >;
+  handoffController?: OperatorHandoffController;
+  webRtcProvisioner?: WebRtcProvisioningController;
 };
 
 type CachedCommand = {
   fingerprint: string;
-  response: TelephonyCommandResult;
+  response:
+    | TelephonyCommandResult
+    | { status: "connecting"; operatorChannelId: string };
 };
 
 export function createGatewayRequestHandler(
   options: GatewayInternalApiOptions,
 ) {
   const submissions = new Map<string, CachedCommand>();
+  const webRtcExpiryTimers = new Map<string, NodeJS.Timeout>();
   return async (request: IncomingMessage, response: ServerResponse) => {
     const path = new URL(request.url ?? "/", "http://gateway.internal")
       .pathname;
@@ -63,7 +115,19 @@ export function createGatewayRequestHandler(
     const isLocalMediaTest =
       path === "/internal/v1/telephony/diagnostics/local-media";
     const isRealtimeTest = path === "/internal/v1/ai/diagnostics/local";
-    if (!isCommand && !isLocalMediaTest && !isRealtimeTest) return false;
+    const isTransferDial = path === "/internal/v1/transfers/dial";
+    const isTransferCancel = path === "/internal/v1/transfers/cancel";
+    const isWebRtcProvision =
+      path === "/internal/v1/transfers/webrtc/provision";
+    if (
+      !isCommand &&
+      !isLocalMediaTest &&
+      !isRealtimeTest &&
+      !isTransferDial &&
+      !isTransferCancel &&
+      !isWebRtcProvision
+    )
+      return false;
     if (request.method !== "POST") {
       json(response, 405, error("method_not_allowed", "POST is required"));
       return true;
@@ -199,6 +263,174 @@ export function createGatewayRequestHandler(
           response,
           409,
           error("ai_diagnostic_failed", "Local AI Realtime diagnostic failed"),
+        );
+      }
+      return true;
+    }
+    if (isTransferDial) {
+      const transfer = transferDialSchema.safeParse(parsedJson);
+      if (!transfer.success) {
+        json(
+          response,
+          422,
+          error("transfer_command_invalid", "Transfer command is invalid"),
+        );
+        return true;
+      }
+      if (!options.handoffController) {
+        json(
+          response,
+          503,
+          error("transfer_unavailable", "Operator handoff is unavailable"),
+        );
+        return true;
+      }
+      const cacheKey = `transfer:${transfer.data.idempotencyKey}`;
+      const fingerprint = createHash("sha256")
+        .update(
+          JSON.stringify({
+            tenantId: transfer.data.tenantId,
+            projectId: transfer.data.projectId,
+            callId: transfer.data.callId,
+            transferRequestId: transfer.data.transferRequestId,
+            destinationType: transfer.data.destinationType,
+            destination: transfer.data.destination,
+          }),
+        )
+        .digest("hex");
+      const cached = submissions.get(cacheKey);
+      if (cached) {
+        if (cached.fingerprint !== fingerprint) {
+          json(
+            response,
+            409,
+            error(
+              "idempotency_key_reused",
+              "Idempotency-Key was reused with another transfer",
+            ),
+          );
+        } else {
+          json(response, 202, cached.response);
+        }
+        return true;
+      }
+      try {
+        const result = await options.handoffController.dialOperator({
+          tenantId: transfer.data.tenantId,
+          projectId: transfer.data.projectId,
+          callId: transfer.data.callId,
+          destinationType: transfer.data.destinationType,
+          destination: transfer.data.destination,
+          correlationId,
+        });
+        submissions.set(cacheKey, { fingerprint, response: result });
+        json(response, 202, result);
+      } catch (transferError) {
+        logger.warn(
+          {
+            correlationId,
+            callId: transfer.data.callId,
+            code:
+              transferError instanceof Error
+                ? transferError.name
+                : "transfer_error",
+          },
+          "operator handoff failed",
+        );
+        json(
+          response,
+          409,
+          error("operator_handoff_failed", "Operator handoff failed"),
+        );
+      }
+      return true;
+    }
+    if (isTransferCancel) {
+      const transfer = transferCancelSchema.safeParse(parsedJson);
+      if (!transfer.success) {
+        json(
+          response,
+          422,
+          error("transfer_command_invalid", "Transfer command is invalid"),
+        );
+        return true;
+      }
+      if (!options.handoffController) {
+        json(
+          response,
+          503,
+          error("transfer_unavailable", "Operator handoff is unavailable"),
+        );
+        return true;
+      }
+      await options.handoffController.cancelOperator(
+        transfer.data.callId,
+        transfer.data.reason,
+      );
+      json(response, 200, { status: "cancelled" });
+      return true;
+    }
+    if (isWebRtcProvision) {
+      const provision = webRtcProvisionSchema.safeParse(parsedJson);
+      if (!provision.success) {
+        json(
+          response,
+          422,
+          error(
+            "webrtc_provision_invalid",
+            "WebRTC provision command is invalid",
+          ),
+        );
+        return true;
+      }
+      if (!options.webRtcProvisioner) {
+        json(
+          response,
+          503,
+          error("webrtc_unavailable", "WebRTC provisioning is unavailable"),
+        );
+        return true;
+      }
+      try {
+        await options.webRtcProvisioner.provisionWebRtcEndpoint(
+          provision.data.membershipId,
+          provision.data.username,
+          provision.data.password,
+        );
+        const existing = webRtcExpiryTimers.get(provision.data.membershipId);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+          webRtcExpiryTimers.delete(provision.data.membershipId);
+          void options.webRtcProvisioner
+            ?.revokeWebRtcEndpoint(provision.data.membershipId)
+            .catch(() => undefined);
+        }, provision.data.ttlSeconds * 1_000);
+        timer.unref();
+        webRtcExpiryTimers.set(provision.data.membershipId, timer);
+        json(response, 201, {
+          status: "provisioned",
+          username: provision.data.username,
+          expiresInSeconds: provision.data.ttlSeconds,
+        });
+      } catch (provisionError) {
+        logger.warn(
+          {
+            correlationId,
+            membershipId: provision.data.membershipId,
+            code:
+              provisionError instanceof Error
+                ? provisionError.name
+                : "webrtc_provision_error",
+          },
+          "WebRTC endpoint provisioning failed",
+        );
+        json(
+          response,
+          409,
+          error(
+            "webrtc_provision_failed",
+            "WebRTC endpoint provisioning failed",
+          ),
         );
       }
       return true;

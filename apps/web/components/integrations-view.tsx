@@ -24,6 +24,24 @@ const statusLabel = {
   verified: "Проверено",
 };
 
+const technicalStatusLabel: Record<string, string> = {
+  configured_live_verification_required: "Настроено — нужна live-проверка",
+  configuration_ready_live_verification_required:
+    "Конфигурация готова — нужна live-проверка",
+  live_openai_verification_required: "Требуется live-проверка OpenAI",
+  live_not_requested: "Live-проверка не запрашивалась",
+  not_applicable: "Не требуется",
+  not_configured: "Не настроено",
+  not_verified: "Не проверено",
+  tunnel_configured_live_verification_required:
+    "Туннель настроен — нужна live-проверка",
+};
+
+function formatTechnicalStatus(value: string | null | undefined) {
+  if (!value) return "—";
+  return technicalStatusLabel[value] ?? value.replaceAll("_", " ");
+}
+
 export function IntegrationsView() {
   const queryClient = useQueryClient();
   const [projectId, setProjectId] = useState("");
@@ -174,7 +192,7 @@ export function IntegrationsView() {
                 <span>
                   Live verification
                   <strong>
-                    {realtimeAI.data?.live_verification ?? "не выполнялась"}
+                    {formatTechnicalStatus(realtimeAI.data?.live_verification)}
                   </strong>
                 </span>
                 <span>
@@ -251,8 +269,11 @@ export function IntegrationsView() {
                   telephony.data?.live_audio_verified ? "success" : "warning"
                 }
               >
-                {telephony.data?.status ??
-                  (telephony.isPending ? "Проверка…" : "Недоступно")}
+                {telephony.data?.status
+                  ? formatTechnicalStatus(telephony.data.status)
+                  : telephony.isPending
+                    ? "Проверка…"
+                    : "Недоступно"}
               </StatusBadge>
             </div>
             {telephony.isError ? (
@@ -262,17 +283,48 @@ export function IntegrationsView() {
             ) : (
               <div className="telephony-status-grid">
                 <span>
-                  ARI<strong>{telephony.data?.ari ?? "—"}</strong>
+                  Архитектура
+                  <strong>{telephony.data?.deployment_mode ?? "—"}</strong>
                 </span>
                 <span>
-                  Trunk<strong>{telephony.data?.sip_trunk ?? "—"}</strong>
+                  Media Gateway
+                  <strong>
+                    {telephony.data?.media_gateway_placement ?? "—"}
+                  </strong>
+                </span>
+                <span>
+                  Edge
+                  <strong>
+                    {formatTechnicalStatus(telephony.data?.edge_connectivity)}
+                  </strong>
+                </span>
+                <span>
+                  Browser WebRTC
+                  <strong>
+                    {formatTechnicalStatus(telephony.data?.browser_webrtc)}
+                  </strong>
+                </span>
+                <span>
+                  ARI
+                  <strong>{formatTechnicalStatus(telephony.data?.ari)}</strong>
+                </span>
+                <span>
+                  Trunk
+                  <strong>
+                    {formatTechnicalStatus(telephony.data?.sip_trunk)}
+                  </strong>
                 </span>
                 <span>
                   Регистрация
-                  <strong>{telephony.data?.registration ?? "—"}</strong>
+                  <strong>
+                    {formatTechnicalStatus(telephony.data?.registration)}
+                  </strong>
                 </span>
                 <span>
-                  RTP<strong>{telephony.data?.external_media ?? "—"}</strong>
+                  RTP
+                  <strong>
+                    {formatTechnicalStatus(telephony.data?.external_media)}
+                  </strong>
                 </span>
                 <span>
                   Кодеки

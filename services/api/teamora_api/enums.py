@@ -204,9 +204,16 @@ class InvitationStatus(StrEnum):
 class TransferStatus(StrEnum):
     REQUESTED = "requested"
     QUEUED = "queued"
+    OFFERED = "offered"
+    CLAIMED = "claimed"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    DECLINED = "declined"
+    TIMED_OUT = "timed_out"
     ASSIGNED = "assigned"
     COMPLETED = "completed"
     CALLBACK_REQUESTED = "callback_requested"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 

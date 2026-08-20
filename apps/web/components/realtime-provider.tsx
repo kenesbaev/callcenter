@@ -44,7 +44,7 @@ const queryGroups: Array<{ prefix: string; keys: string[][] }> = [
   },
   {
     prefix: "transfer.",
-    keys: [["calls"], ["live-calls"], ["dialer"], ["team"]],
+    keys: [["calls"], ["live-calls"], ["dialer"], ["team"], ["transfers"]],
   },
   { prefix: "dialer.", keys: [["dialer"]] },
   {
@@ -151,6 +151,7 @@ export function RealtimeProvider({
       ["customer-imports"],
       ["storage"],
       ["retention"],
+      ["transfers"],
       ["legal-holds"],
     ]) {
       void queryClient.invalidateQueries({ queryKey: key });

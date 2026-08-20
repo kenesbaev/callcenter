@@ -190,4 +190,44 @@ describe("VoiceSessionController", () => {
     );
     expect(controller.state).toBe("active");
   });
+
+  it("clears AI playback during handoff and resumes it after a failed operator leg", async () => {
+    const provider = new MockProvider();
+    const clearPlayback = vi.fn(async () => undefined);
+    const emit = vi.fn(async () => undefined);
+    const controller = new VoiceSessionController({
+      callId: "call-1",
+      tenantId: "tenant-1",
+      projectId: "project-1",
+      config: {
+        callId: "call-1",
+        tenantId: "tenant-1",
+        model: "mock",
+        voice: "mock",
+        instructions: "safe",
+        language: "ru",
+        toolDefinitions: [],
+      },
+      provider,
+      tools: new ToolExecutor(async () => ({ ok: true })),
+      emit,
+      writeAudio: vi.fn(async () => undefined),
+      clearPlayback,
+    });
+    await controller.start();
+    await provider.handler?.({
+      type: "audio.output",
+      audioBase64: Buffer.alloc(480).toString("base64"),
+      itemId: "handoff-item",
+    });
+    await controller.prepareHandoff();
+    expect(controller.state).toBe("degraded");
+    expect(provider.session.interrupt).toHaveBeenCalledWith(
+      "handoff-item",
+      expect.any(Number),
+    );
+    expect(clearPlayback).toHaveBeenCalled();
+    await controller.resumeAfterHandoff();
+    expect(controller.state).toBe("active");
+  });
 });

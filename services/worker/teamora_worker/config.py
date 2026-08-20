@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,8 @@ class WorkerSettings(BaseSettings):
     minio_bucket: str = "teamora-private"
     minio_root_user: str = ""
     minio_root_password: str = ""
+    api_internal_url: str = "http://api:8000"
+    gateway_service_token: SecretStr | None = None
     asterisk_recordings_path: Path = Path("/var/spool/asterisk/monitor")
     recording_max_file_bytes: int = Field(default=1024 * 1024 * 1024, ge=1024)
     knowledge_max_pdf_pages: int = 500

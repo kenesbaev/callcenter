@@ -29,6 +29,7 @@ from teamora_api.routers import (
     customers,
     dialer,
     health,
+    internal_transfers,
     knowledge,
     operations,
     operators,
@@ -39,6 +40,7 @@ from teamora_api.routers import (
     team,
     telephony,
     tenants,
+    transfers,
     webhooks,
 )
 
@@ -95,6 +97,7 @@ app.include_router(customer_imports.router, prefix=api_v1_prefix)
 app.include_router(customers.router, prefix=api_v1_prefix)
 app.include_router(callbacks.router, prefix=api_v1_prefix)
 app.include_router(tasks.router, prefix=api_v1_prefix)
+app.include_router(transfers.router, prefix=api_v1_prefix)
 app.include_router(telephony.router, prefix=api_v1_prefix)
 app.include_router(team.router, prefix=api_v1_prefix)
 app.include_router(dialer.router, prefix=api_v1_prefix)
@@ -104,6 +107,7 @@ app.include_router(analytics.router, prefix=api_v1_prefix)
 app.include_router(ai_realtime.router, prefix=api_v1_prefix)
 app.include_router(operations.router, prefix=api_v1_prefix)
 app.include_router(webhooks.router, prefix=api_v1_prefix)
+app.include_router(internal_transfers.router)
 
 
 @app.get("/metrics", include_in_schema=False)

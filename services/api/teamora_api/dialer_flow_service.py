@@ -268,10 +268,19 @@ async def _perform_action(
                 session.add(
                     TransferRequest(
                         tenant_id=call.tenant_id,
+                        project_id=call.project_id,
                         call_id=call.id,
                         status=TransferStatus.REQUESTED,
                         reason=str(node.action_config.get("reason") or "ai_call_flow_requested")[:500],
                         summary="AI Call Flow requested human assistance",
+                        language_code=(call.language.value if call.language else execution.language_code),
+                        routing_strategy="longest_idle",
+                        destination_type="browser",
+                        context_snapshot={"flow_node_id": str(node.id)},
+                        attempt_count=0,
+                        max_attempts=3,
+                        idempotency_key=f"flow-transfer:{execution.id}:{node.id}:{idempotency_key}",
+                        lock_version=1,
                         requested_at=datetime.now(UTC),
                     )
                 )

@@ -62,6 +62,7 @@ async def telephony_status(
     session: SessionDep,
     principal: Principal = require_permission("integrations:read"),
 ) -> TelephonyStatusRead:
+    settings = get_settings()
     trunks = list(
         await session.scalars(
             select(SipTrunk).where(SipTrunk.tenant_id == principal.tenant_id).order_by(SipTrunk.name)
@@ -126,6 +127,22 @@ async def telephony_status(
         status = "live_audio_verified"
     return TelephonyStatusRead(
         status=status,
+        deployment_mode=settings.telephony_sip_architecture,
+        media_gateway_placement=settings.telephony_media_gateway_placement,
+        edge_connectivity=(
+            "not_applicable"
+            if settings.telephony_sip_architecture == "direct"
+            else (
+                "tunnel_configured_live_verification_required"
+                if settings.telephony_edge_tunnel_enabled
+                else "not_configured"
+            )
+        ),
+        browser_webrtc=(
+            "configured_live_verification_required"
+            if settings.operator_webrtc_wss_url.startswith("wss://")
+            else "not_configured"
+        ),
         asterisk="configured_live_verification_required" if primary else "not_configured",
         ari="configured_live_verification_required" if primary else "not_configured",
         sip_trunk="configured" if primary else "not_configured",

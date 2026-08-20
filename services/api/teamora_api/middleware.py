@@ -51,6 +51,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         "/api/v1/webhooks/ai-realtime/session",
         "/api/v1/webhooks/ai-realtime/events",
         "/api/v1/webhooks/ai-realtime/tools",
+        "/internal/v1/transfers/process-expired",
     }
 
     async def dispatch(
@@ -91,6 +92,7 @@ class LocalRateLimitMiddleware(BaseHTTPMiddleware):
         "/api/v1/webhooks/ai-realtime/session",
         "/api/v1/webhooks/ai-realtime/events",
         "/api/v1/webhooks/ai-realtime/tools",
+        "/internal/v1/transfers/process-expired",
     }
 
     def __init__(self, app: object, settings: Settings) -> None:

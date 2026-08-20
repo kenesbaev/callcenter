@@ -40,6 +40,7 @@ from teamora_api.schemas.telephony import (
     TelephonyProviderEvent,
 )
 from teamora_api.telephony.control import reserve_channel
+from teamora_api.transfer_service import apply_provider_transfer_event
 from teamora_api.webhooks import verify_standard_webhook
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -154,6 +155,21 @@ async def telephony_webhook(request: Request, session: SessionDep) -> dict[str, 
             provider_timestamp=event.provider_timestamp,
             correlation_id=event.correlation_id,
             safe_payload=dict(event.safe_payload),
+        )
+    if (
+        event.event_type in {"transfer.completed", "transfer.failed"}
+        and transition.ignored_reason != "duplicate"
+    ):
+        provider_channel = event.safe_payload.get("operatorChannelId")
+        safe_error = event.safe_payload.get("cause")
+        await apply_provider_transfer_event(
+            session,
+            call=call,
+            event_type=event.event_type,
+            provider_channel_id=provider_channel if isinstance(provider_channel, str) else None,
+            safe_error_code=safe_error if isinstance(safe_error, str) else None,
+            correlation_id=event.correlation_id,
+            settings=settings,
         )
     await session.commit()
     return {
