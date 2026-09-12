@@ -14,9 +14,11 @@ import {
   ListTodo,
   LogOut,
   MessageSquareText,
+  Mic2,
   PhoneCall,
   Radio,
   Settings,
+  Sparkles,
   Users,
   Wrench,
 } from "lucide-react";
@@ -83,6 +85,12 @@ const primaryNav: Array<{
     roles: managementRoles,
   },
   {
+    href: "/app/ai-setup",
+    label: "Настройка AI",
+    icon: Sparkles,
+    roles: managementRoles,
+  },
+  {
     href: "/app/knowledge",
     label: "База знаний",
     icon: BookOpen,
@@ -111,6 +119,12 @@ const secondaryNav: Array<{
     roles: managementRoles,
   },
   {
+    href: "/app/language-lab",
+    label: "Voice AI Lab",
+    icon: Mic2,
+    roles: managementRoles,
+  },
+  {
     href: "/app/analytics",
     label: "Аналитика",
     icon: BarChart3,
@@ -131,9 +145,9 @@ const secondaryNav: Array<{
 ];
 
 const roleLabels: Record<string, string> = {
-  platform_admin: "Администратор платформы",
-  tenant_owner: "Владелец",
-  tenant_manager: "Менеджер",
+  platform_admin: "Super admin K-Line",
+  tenant_owner: "Владелец компании",
+  tenant_manager: "Администратор компании",
   human_operator: "Оператор",
   analyst: "Аналитик",
   billing_admin: "Биллинг",

@@ -56,6 +56,20 @@ describe("ToolExecutor", () => {
     );
   });
 
+  it("accepts the internal no-op tool only when it is explicitly enabled", async () => {
+    const dispatch = vi.fn().mockResolvedValue({ ok: true, waiting: true });
+    const executor = new ToolExecutor(dispatch);
+    await expect(
+      executor.execute(
+        { ...context, allowedTools: ["wait_for_user"] },
+        "wait_for_user",
+        {},
+        "idem-wait",
+      ),
+    ).resolves.toEqual({ ok: true, waiting: true });
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
   it("fails closed on timeout", async () => {
     vi.useFakeTimers();
     const executor = new ToolExecutor(

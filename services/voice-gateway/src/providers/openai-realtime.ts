@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import WebSocket, { type RawData } from "ws";
 import { z } from "zod";
 import type {
   ProviderStatus,
   RealtimeProviderEvent,
+  RealtimePlaybackPosition,
   RealtimeSessionConfig,
   RealtimeUsage,
   RealtimeVoiceProvider,
@@ -57,7 +58,7 @@ class OpenAiRealtimeSession implements RealtimeVoiceSession {
       event_id: randomUUID(),
       response: {
         instructions: `Say exactly this disclosure, without adding anything: ${text.slice(0, 500)}`,
-        modalities: ["audio", "text"],
+        output_modalities: ["audio"],
       },
     });
   }
@@ -76,14 +77,23 @@ class OpenAiRealtimeSession implements RealtimeVoiceSession {
   }
 
   async interrupt(itemId?: string, playedAudioMs?: number): Promise<void> {
+    await this.interruptPlayback(
+      itemId && playedAudioMs !== undefined ? [{ itemId, playedAudioMs }] : [],
+    );
+  }
+
+  async interruptPlayback(items: RealtimePlaybackPosition[]): Promise<void> {
     this.send({ type: "response.cancel", event_id: randomUUID() });
-    if (itemId && playedAudioMs !== undefined) {
+    const seen = new Set<string>();
+    for (const item of items) {
+      if (!item.itemId || seen.has(item.itemId)) continue;
+      seen.add(item.itemId);
       this.send({
         type: "conversation.item.truncate",
         event_id: randomUUID(),
-        item_id: itemId,
+        item_id: item.itemId,
         content_index: 0,
-        audio_end_ms: Math.max(0, Math.floor(playedAudioMs)),
+        audio_end_ms: Math.max(0, Math.floor(item.playedAudioMs)),
       });
     }
   }
@@ -117,7 +127,10 @@ export class OpenAiRealtimeProvider implements RealtimeVoiceProvider {
       this.options.url ??
       `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(config.model)}`;
     const socket = new WebSocket(url, {
-      headers: { Authorization: `Bearer ${this.options.apiKey}` },
+      headers: {
+        Authorization: `Bearer ${this.options.apiKey}`,
+        "OpenAI-Safety-Identifier": safetyIdentifier(config),
+      },
       maxPayload: this.options.maxMessageBytes ?? 1_048_576,
       handshakeTimeout: this.options.connectTimeoutMs ?? 10_000,
     });
@@ -126,42 +139,74 @@ export class OpenAiRealtimeProvider implements RealtimeVoiceProvider {
       this.options.maxQueueBytes ?? 4_194_304,
     );
     this.sessions.add(session);
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        socket.terminate();
-        reject(new Error("Realtime connection timed out"));
-      }, this.options.connectTimeoutMs ?? 10_000);
-      socket.once("open", () => {
-        clearTimeout(timeout);
-        void (async () => {
-          try {
-            await session.updateSession(config);
-            await onEvent({
-              type: "session.ready",
-              providerSessionId: session.providerSessionId,
-            });
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-        })();
-      });
-      socket.once("error", (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
+    let readySettled = false;
+    let resolveReady!: () => void;
+    let rejectReady!: (error: Error) => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
     });
+    const timeout = setTimeout(() => {
+      if (readySettled) return;
+      readySettled = true;
+      socket.terminate();
+      rejectReady(new Error("Realtime session update timed out"));
+    }, this.options.connectTimeoutMs ?? 10_000);
+    const settleReady = (): void => {
+      if (readySettled) return;
+      readySettled = true;
+      clearTimeout(timeout);
+      resolveReady();
+    };
+    const failReady = (error: Error): void => {
+      if (readySettled) return;
+      readySettled = true;
+      clearTimeout(timeout);
+      rejectReady(error);
+    };
+    let delivery = Promise.resolve();
     socket.on("message", (raw) => {
-      void this.handleMessage(raw, config, onEvent).catch(() => {
-        void onEvent({
-          type: "session.error",
-          code: "provider_event_delivery_failed",
-          retryable: true,
-        }).catch(() => undefined);
-      });
+      delivery = delivery
+        .then(async () => {
+          const disposition = await this.handleMessage(
+            raw,
+            config,
+            onEvent,
+            session.providerSessionId,
+          );
+          if (disposition === "ready") settleReady();
+          if (disposition === "error")
+            failReady(new Error("Realtime rejected the session configuration"));
+        })
+        .catch(() => {
+          if (!readySettled) {
+            failReady(new Error("Realtime session event delivery failed"));
+            return;
+          }
+          void onEvent({
+            type: "session.error",
+            code: "provider_event_delivery_failed",
+            retryable: true,
+          }).catch(() => undefined);
+        });
+    });
+    socket.once("open", () => {
+      void session
+        .updateSession(config)
+        .catch((error: unknown) =>
+          failReady(
+            error instanceof Error
+              ? error
+              : new Error("Realtime session update failed"),
+          ),
+        );
     });
     socket.on("close", (_code, reason) => {
       this.sessions.delete(session);
+      if (!readySettled) {
+        failReady(new Error("Realtime socket closed before session.updated"));
+        return;
+      }
       if (session.isClosed) {
         void onEvent({
           type: "session.closed",
@@ -175,15 +220,24 @@ export class OpenAiRealtimeProvider implements RealtimeVoiceProvider {
         }).catch(() => undefined);
       }
     });
-    socket.on(
-      "error",
-      () =>
-        void onEvent({
-          type: "session.error",
-          code: "provider_socket_error",
-          retryable: true,
-        }).catch(() => undefined),
-    );
+    socket.on("error", (error) => {
+      if (!readySettled) {
+        failReady(error);
+        return;
+      }
+      void onEvent({
+        type: "session.error",
+        code: "provider_socket_error",
+        retryable: true,
+      }).catch(() => undefined);
+    });
+    try {
+      await ready;
+    } catch (error) {
+      this.sessions.delete(session);
+      if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+      throw error;
+    }
     return session;
   }
 
@@ -197,7 +251,8 @@ export class OpenAiRealtimeProvider implements RealtimeVoiceProvider {
     raw: RawData,
     config: RealtimeSessionConfig,
     onEvent: (event: RealtimeProviderEvent) => Promise<void>,
-  ): Promise<void> {
+    providerSessionId: string,
+  ): Promise<"ready" | "error" | undefined> {
     let unknownEvent: unknown;
     try {
       unknownEvent = JSON.parse(raw.toString());
@@ -207,7 +262,7 @@ export class OpenAiRealtimeProvider implements RealtimeVoiceProvider {
         code: "invalid_provider_json",
         retryable: false,
       });
-      return;
+      return "error";
     }
     const parsed = providerEventSchema.safeParse(unknownEvent);
     if (!parsed.success) {
@@ -216,11 +271,19 @@ export class OpenAiRealtimeProvider implements RealtimeVoiceProvider {
         code: "invalid_provider_event",
         retryable: false,
       });
-      return;
+      return "error";
     }
     const event = parsed.data;
     const type = event.type;
     const eventId = stringValue(event.event_id);
+    if (type === "session.updated") {
+      await onEvent({
+        type: "session.ready",
+        providerSessionId,
+        eventId,
+      });
+      return "ready";
+    }
     if (type === "response.output_audio.delta") {
       const delta = stringValue(event.delta);
       const itemId = stringValue(event.item_id);
@@ -345,7 +408,9 @@ export class OpenAiRealtimeProvider implements RealtimeVoiceProvider {
         ].includes(code),
         eventId,
       });
+      return "error";
     }
+    return undefined;
   }
 }
 
@@ -381,6 +446,7 @@ function sessionUpdate(config: RealtimeSessionConfig): Record<string, unknown> {
       type: "realtime",
       model: config.model,
       instructions: config.instructions,
+      output_modalities: ["audio"],
       audio: {
         input: {
           format: {
@@ -425,8 +491,9 @@ function parseUsage(value: Record<string, unknown>): RealtimeUsage | undefined {
     outputAudioTokens: numberValue(output.audio_tokens),
     inputTextTokens: numberValue(input.text_tokens),
     outputTextTokens: numberValue(output.text_tokens),
-    cachedTokens:
-      numberValue(input.cached_tokens) ?? numberValue(cached.audio_tokens),
+    cachedAudioTokens: numberValue(cached.audio_tokens),
+    cachedTextTokens: numberValue(cached.text_tokens),
+    cachedTokens: numberValue(input.cached_tokens),
     totalTokens: numberValue(value.total_tokens),
   };
 }
@@ -448,4 +515,12 @@ function safeCode(value: string): string {
   return (
     value.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80) || "provider_error"
   );
+}
+
+function safetyIdentifier(config: RealtimeSessionConfig): string {
+  const configured = config.safetyIdentifier?.trim();
+  if (configured) return configured;
+  return `cc_${createHash("sha256")
+    .update(`${config.tenantId}:${config.callId}`)
+    .digest("hex")}`;
 }

@@ -22,6 +22,7 @@ const config: RealtimeSessionConfig = {
   voice: "marin",
   instructions: "safe test",
   language: "kaa-latn",
+  safetyIdentifier: "cc_test_safety_identifier",
   toolDefinitions: [],
   vad: {
     type: "server_vad",
@@ -63,9 +64,21 @@ describe("Realtime providers", () => {
       expect(request.headers.authorization).toBe(
         "Bearer test-key-not-secret-123456",
       );
-      socket.on("message", (raw) =>
-        received.push(JSON.parse(raw.toString()) as Record<string, unknown>),
+      expect(request.headers["openai-safety-identifier"]).toBe(
+        "cc_test_safety_identifier",
       );
+      socket.on("message", (raw) => {
+        const event = JSON.parse(raw.toString()) as Record<string, unknown>;
+        received.push(event);
+        if (event.type === "session.update") {
+          socket.send(
+            JSON.stringify({
+              type: "session.updated",
+              event_id: "provider-session-updated",
+            }),
+          );
+        }
+      });
     });
     await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
     cleanup.push(async () => {
@@ -86,6 +99,9 @@ describe("Realtime providers", () => {
     await session.interrupt("item-1", 42.9);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(received[0]).toMatchObject({ type: "session.update" });
+    expect(received[0]).toMatchObject({
+      session: { output_modalities: ["audio"] },
+    });
     expect(
       received.some((event) => event.type === "input_audio_buffer.append"),
     ).toBe(true);
@@ -99,6 +115,52 @@ describe("Realtime providers", () => {
         audio_end_ms: 42,
       }),
     );
+    await provider.shutdown();
+  });
+
+  it("cancels once and truncates every queued playback item", async () => {
+    const http = createServer();
+    const websocket = new WebSocketServer({ server: http });
+    const received: Array<Record<string, unknown>> = [];
+    websocket.on("connection", (socket) => {
+      socket.on("message", (raw) => {
+        const event = JSON.parse(raw.toString()) as Record<string, unknown>;
+        received.push(event);
+        if (event.type === "session.update") {
+          socket.send(JSON.stringify({ type: "session.updated" }));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+    cleanup.push(async () => {
+      websocket.clients.forEach((socket) => socket.terminate());
+      await new Promise<void>((resolve) => websocket.close(() => resolve()));
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+    });
+    const port = (http.address() as AddressInfo).port;
+    const provider = new OpenAiRealtimeProvider({
+      apiKey: "test-key-not-secret-123456",
+      url: `ws://127.0.0.1:${port}/v1/realtime`,
+    });
+    const session = await provider.createSession(
+      config,
+      vi.fn(async () => undefined),
+    );
+    await session.interruptPlayback?.([
+      { itemId: "item-1", playedAudioMs: 21.9 },
+      { itemId: "item-2", playedAudioMs: 84.1 },
+      { itemId: "item-1", playedAudioMs: 100 },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      received.filter((event) => event.type === "response.cancel"),
+    ).toHaveLength(1);
+    expect(
+      received.filter((event) => event.type === "conversation.item.truncate"),
+    ).toEqual([
+      expect.objectContaining({ item_id: "item-1", audio_end_ms: 21 }),
+      expect.objectContaining({ item_id: "item-2", audio_end_ms: 84 }),
+    ]);
     await provider.shutdown();
   });
 });

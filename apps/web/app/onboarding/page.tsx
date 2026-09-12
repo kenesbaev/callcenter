@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function OnboardingPage() {
-  redirect("/app/ai-operators");
+  redirect("/app/ai-setup");
 }

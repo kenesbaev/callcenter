@@ -17,6 +17,8 @@ export type RealtimeSessionConfig = {
   inputAudioFormat?: RealtimeAudioFormat | undefined;
   outputAudioFormat?: RealtimeAudioFormat | undefined;
   reasoningEffort?: "low" | "medium" | "high" | undefined;
+  /** Privacy-preserving identifier used only on the trusted provider connection. */
+  safetyIdentifier?: string | undefined;
 };
 
 export type RealtimeVadConfig =
@@ -115,8 +117,15 @@ export type RealtimeUsage = {
   outputAudioTokens?: number | undefined;
   inputTextTokens?: number | undefined;
   outputTextTokens?: number | undefined;
+  cachedAudioTokens?: number | undefined;
+  cachedTextTokens?: number | undefined;
   cachedTokens?: number | undefined;
   totalTokens?: number | undefined;
+};
+
+export type RealtimePlaybackPosition = {
+  itemId: string;
+  playedAudioMs: number;
 };
 
 export interface RealtimeVoiceSession {
@@ -126,6 +135,7 @@ export interface RealtimeVoiceSession {
   appendAudio(audio: Uint8Array): Promise<void>;
   sendToolResult(callId: string, result: unknown): Promise<void>;
   interrupt(itemId?: string, playedAudioMs?: number): Promise<void>;
+  interruptPlayback?(items: RealtimePlaybackPosition[]): Promise<void>;
   close(reason: string): Promise<void>;
 }
 
@@ -317,6 +327,7 @@ export const toolNames = [
   "submit_call_result",
   "request_human_transfer",
   "end_conversation",
+  "wait_for_user",
   "find_customer",
   "create_customer",
   "create_lead",

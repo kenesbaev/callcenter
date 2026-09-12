@@ -129,6 +129,17 @@ export const toolRegistry: Record<ToolName, RealtimeToolDefinition> = {
     inputSchema: reasonSchema,
     timeoutMs: 3000,
   },
+  wait_for_user: {
+    name: "wait_for_user",
+    description:
+      "End this turn without speaking when the latest audio is silence, background noise, hold music, or not addressed to the assistant.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    timeoutMs: 1000,
+  },
   find_customer: {
     name: "find_customer",
     description:

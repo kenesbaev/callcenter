@@ -2,7 +2,8 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckCircle2 } from "lucide-react";
+import { Bot, CheckCircle2, Sparkles } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { Button, StatusBadge } from "@teamora/ui";
@@ -74,7 +75,24 @@ export function OperatorsView() {
     <>
       <div className="page-heading">
         <h1>AI-операторы</h1>
+        <p>Черновики, версии и публикация голосовых помощников компании</p>
       </div>
+      <section className="ai-operator-setup-banner">
+        <div className="ai-operator-setup-icon">
+          <Sparkles aria-hidden="true" size={22} />
+        </div>
+        <div>
+          <strong>Сначала расскажите AI о компании</strong>
+          <p>
+            Ответьте на 20 вопросов о бизнесе, клиентах, голосе и правилах
+            перевода. Сейчас это безопасный frontend-черновик без обращения к
+            OpenAI.
+          </p>
+        </div>
+        <Link className="tv-button tv-button-primary" href="/app/ai-setup">
+          Открыть настройку
+        </Link>
+      </section>
       <div className="content-grid">
         <section className="panel">
           <div className="row-between">

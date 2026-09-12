@@ -37,7 +37,10 @@ from teamora_api.schemas.ai_realtime import (
     AIRealtimeToolExecutionRead,
     AIRealtimeToolRequest,
     AIRealtimeUsageRead,
+    VoiceLabTicketRead,
+    VoiceLabTicketRequest,
 )
+from teamora_api.voice_lab_tokens import create_voice_lab_ticket
 from teamora_api.webhooks import verify_standard_webhook
 
 router = APIRouter(tags=["ai-realtime"])
@@ -190,17 +193,22 @@ async def ai_status(
         )
     ).one()
     samples = int(latency_row[0] or 0)
+    paid_provider = settings.openai_realtime_provider == "openai"
     live_status = (
         "live_not_requested"
-        if settings.openai_realtime_provider == "openai" and settings.openai_realtime_enabled
-        else "live_openai_verification_required"
+        if paid_provider and settings.openai_realtime_enabled
+        else "not_applicable"
+        if not paid_provider
+        else "not_configured"
     )
     return AIRealtimeStatusRead(
-        configured=settings.openai_api_key is not None,
+        configured=not paid_provider or settings.openai_api_key is not None,
         enabled=settings.openai_realtime_enabled,
         provider=settings.openai_realtime_provider,
         model=settings.openai_realtime_model,
         voice=settings.openai_realtime_voice,
+        voice_lab_enabled=settings.openai_voice_lab_enabled,
+        voice_lab_max_seconds=settings.openai_voice_lab_max_seconds,
         live_verification=live_status,
         last_session_state=latest.state if latest else None,
         last_safe_error=latest.safe_error_code if latest else None,
@@ -212,6 +220,43 @@ async def ai_status(
             p99_ms=float(latency_row[3]) if latency_row[3] is not None else None,
             is_available=samples > 0,
         ),
+    )
+
+
+@router.post("/ai-realtime/lab/ticket", response_model=VoiceLabTicketRead)
+async def create_voice_lab_access(
+    payload: VoiceLabTicketRequest,
+    principal: Principal = require_permission("integrations:manage"),
+) -> VoiceLabTicketRead:
+    settings = get_settings()
+    if not settings.openai_voice_lab_enabled or not settings.openai_realtime_enabled:
+        raise ApiError(503, "voice_lab_disabled", "Voice Lab is not enabled")
+    if settings.gateway_service_token is None:
+        raise ApiError(503, "ai_gateway_unavailable", "Voice Gateway is not configured")
+    paid_provider = settings.openai_realtime_provider == "openai"
+    if paid_provider and settings.openai_api_key is None:
+        raise ApiError(503, "openai_not_configured", "OpenAI Realtime is not configured")
+    if paid_provider and payload.confirmation != "I_APPROVE_PAID_VOICE_LAB":
+        raise ApiError(
+            422,
+            "voice_lab_confirmation_required",
+            "Explicit confirmation is required before a paid Voice Lab session",
+        )
+    token, expires_at = create_voice_lab_ticket(
+        secret=settings.gateway_service_token.get_secret_value(),
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        language=payload.language,
+    )
+    return VoiceLabTicketRead(
+        token=token,
+        websocket_url="/gateway/voice-lab/ws",
+        expires_at=expires_at,
+        max_seconds=settings.openai_voice_lab_max_seconds,
+        provider=settings.openai_realtime_provider,
+        model=(settings.openai_realtime_model if paid_provider else "mock-realtime-deterministic"),
+        voice=settings.openai_realtime_voice if paid_provider else "mock",
+        paid_provider=paid_provider,
     )
 
 

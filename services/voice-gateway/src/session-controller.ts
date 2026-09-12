@@ -1,5 +1,6 @@
 import type {
   RealtimeProviderEvent,
+  RealtimePlaybackPosition,
   RealtimeSessionConfig,
   RealtimeUsage,
   RealtimeVoiceProvider,
@@ -40,7 +41,7 @@ type ControllerOptions = {
   provider: RealtimeVoiceProvider;
   tools: ToolExecutor;
   emit: (event: SafeSessionEvent) => Promise<void>;
-  writeAudio: (audio: Uint8Array) => Promise<void>;
+  writeAudio: (audio: Uint8Array) => Promise<number | void>;
   clearPlayback?: () => Promise<void>;
   maxReconnects?: number;
   reconnectBaseMs?: number;
@@ -52,8 +53,10 @@ export class VoiceSessionController {
   private providerSession?: RealtimeVoiceSession;
   private reconnects = 0;
   private readonly seenEvents = new Set<string>();
-  private currentOutputItem: string | undefined;
-  private playedAudioMs = 0;
+  private readonly playbackItems = new Map<string, number>();
+  private playbackGeneration = 0;
+  private playbackQueue = Promise.resolve();
+  private lastInterruptedItem: string | undefined;
   private queuedAudioBytes = 0;
   private responseStartedAt?: number;
   private speechStoppedAt?: number;
@@ -168,6 +171,9 @@ export class VoiceSessionController {
   async close(reason: string): Promise<void> {
     if (["closed", "closing"].includes(this.currentState)) return;
     this.currentState = "closing";
+    this.playbackGeneration += 1;
+    this.playbackItems.clear();
+    await this.options.clearPlayback?.();
     await this.providerSession?.close(reason);
     this.currentState = "closed";
     if (this.countedActive) {
@@ -250,14 +256,37 @@ export class VoiceSessionController {
             .observe((this.firstAudioAt - this.speechStoppedAt) / 1000);
         }
       }
-      this.currentOutputItem = event.itemId;
+      if (!this.playbackItems.has(event.itemId))
+        this.playbackItems.set(event.itemId, 0);
       this.queuedAudioBytes += audio.byteLength;
-      try {
-        await this.options.writeAudio(audio);
-        this.playedAudioMs += audio.byteLength / 48;
-      } finally {
-        this.queuedAudioBytes -= audio.byteLength;
-      }
+      const generation = this.playbackGeneration;
+      this.playbackQueue = this.playbackQueue
+        .then(async () => {
+          if (generation !== this.playbackGeneration) return;
+          const reported = await this.options.writeAudio(audio);
+          const playedMs =
+            typeof reported === "number" && Number.isFinite(reported)
+              ? Math.max(0, reported)
+              : audio.byteLength / 48;
+          this.playbackItems.set(
+            event.itemId,
+            (this.playbackItems.get(event.itemId) ?? 0) + playedMs,
+          );
+        })
+        .catch(async () => {
+          if (!["closing", "closed", "failed"].includes(this.currentState)) {
+            this.currentState = "degraded";
+            await this.emit("ai.session_degraded", {
+              code: "playback_write_failed",
+            });
+          }
+        })
+        .finally(() => {
+          this.queuedAudioBytes = Math.max(
+            0,
+            this.queuedAudioBytes - audio.byteLength,
+          );
+        });
       return;
     }
     if (event.type === "speech.started") {
@@ -378,24 +407,31 @@ export class VoiceSessionController {
     if (event.type === "audio.interrupted") {
       await this.emit(
         "ai.interrupted",
-        { item_id: event.itemId ?? this.currentOutputItem ?? "unknown" },
+        { item_id: event.itemId ?? this.lastInterruptedItem ?? "unknown" },
         event.eventId,
       );
     }
   }
 
   private async interruptPlayback(): Promise<void> {
-    if (!this.providerSession || !this.currentOutputItem) return;
-    const itemId = this.currentOutputItem;
-    const played = this.playedAudioMs;
-    this.currentOutputItem = undefined;
-    this.playedAudioMs = 0;
-    this.queuedAudioBytes = 0;
+    if (!this.providerSession || this.playbackItems.size === 0) return;
+    const positions: RealtimePlaybackPosition[] = [...this.playbackItems].map(
+      ([itemId, playedAudioMs]) => ({ itemId, playedAudioMs }),
+    );
+    const last = positions.at(-1)!;
+    this.lastInterruptedItem = last.itemId;
+    this.playbackGeneration += 1;
+    this.playbackItems.clear();
     await this.options.clearPlayback?.();
-    await this.providerSession.interrupt(itemId, played);
+    if (this.providerSession.interruptPlayback) {
+      await this.providerSession.interruptPlayback(positions);
+    } else {
+      await this.providerSession.interrupt(last.itemId, last.playedAudioMs);
+    }
     await this.emit("ai.interrupted", {
-      item_id: itemId,
-      played_audio_ms: Math.round(played),
+      item_id: last.itemId,
+      played_audio_ms: Math.round(last.playedAudioMs),
+      playback_items: positions.length,
     });
   }
 
@@ -411,6 +447,8 @@ export class VoiceSessionController {
         output_audio_tokens: usage.outputAudioTokens ?? 0,
         input_text_tokens: usage.inputTextTokens ?? 0,
         output_text_tokens: usage.outputTextTokens ?? 0,
+        cached_audio_tokens: usage.cachedAudioTokens ?? 0,
+        cached_text_tokens: usage.cachedTextTokens ?? 0,
         cached_tokens: usage.cachedTokens ?? 0,
         total_tokens: usage.totalTokens ?? 0,
       },

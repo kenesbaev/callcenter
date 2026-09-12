@@ -86,19 +86,20 @@ export class RtpDiagnosticAdapter {
     this.playbackGeneration += 1;
   }
 
-  async writePcm24k(audio: Uint8Array): Promise<void> {
+  async writePcm24k(audio: Uint8Array): Promise<number> {
     const remote = this.remote;
     if (!this.socket || !remote)
       throw new Error("RTP remote endpoint is unavailable");
     const generation = this.playbackGeneration;
     const payload = pcm24kToPcmuPayload(audio);
+    let playedMs = 0;
     for (let offset = 0; offset < payload.byteLength; offset += 160) {
-      if (generation !== this.playbackGeneration) return;
+      if (generation !== this.playbackGeneration) return playedMs;
       const frame = payload.subarray(
         offset,
         Math.min(offset + 160, payload.byteLength),
       );
-      if (frame.byteLength < 160) return;
+      if (frame.byteLength < 160) return playedMs;
       const packet = buildPcmuRtpPacket(
         frame,
         this.outputSequence,
@@ -114,11 +115,13 @@ export class RtpDiagnosticAdapter {
       });
       this.statistics.packetsSent += 1;
       this.statistics.bytesSent += packet.byteLength;
+      playedMs += 20;
       // PCMU uses 160 samples per 20 ms packet.  Pace playback here so the
       // queue represents real playout time and can be cleared deterministically
       // when VAD reports barge-in.
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    return playedMs;
   }
 
   async clearPlayback(): Promise<void> {

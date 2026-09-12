@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -43,6 +44,7 @@ class AIRealtimeSessionConfiguration(BaseModel):
     voice: str
     language: str
     instructions: str
+    safety_identifier: str = Field(alias="safetyIdentifier", min_length=3, max_length=120)
     tools: list[AIRealtimeToolDefinition]
     recording_allowed: bool = Field(alias="recordingAllowed")
     disclosure_required: bool = Field(alias="disclosureRequired")
@@ -159,11 +161,31 @@ class AIRealtimeStatusRead(BaseModel):
     provider: str
     model: str
     voice: str
+    voice_lab_enabled: bool
+    voice_lab_max_seconds: int
     live_verification: str
     last_session_state: str | None
     last_safe_error: str | None
     active_sessions: int
     latency: AIRealtimeLatencyRead
+
+
+class VoiceLabTicketRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    language: Literal["ru", "uz"] = "ru"
+    confirmation: str = Field(default="", max_length=80)
+
+
+class VoiceLabTicketRead(BaseModel):
+    token: str
+    websocket_url: str
+    expires_at: datetime
+    max_seconds: int
+    provider: str
+    model: str
+    voice: str
+    paid_provider: bool
 
 
 class AIRealtimeDiagnosticRead(BaseModel):

@@ -1266,6 +1266,8 @@ export type AIRealtimeStatus = {
   last_session_state: string | null;
   last_safe_error: string | null;
   active_sessions: number;
+  voice_lab_enabled: boolean;
+  voice_lab_max_seconds: number;
   latency: {
     metric: "first_audio_latency_ms";
     samples: number;
@@ -1274,6 +1276,28 @@ export type AIRealtimeStatus = {
     p99_ms: number | null;
     is_available: boolean;
   };
+};
+
+export type VoiceLabTicket = {
+  token: string;
+  websocket_url: string;
+  expires_at: string;
+  max_seconds: number;
+  provider: "mock" | "openai";
+  model: string;
+  voice: string;
+  paid_provider: boolean;
+};
+
+export type RealtimeUsageSummary = {
+  inputAudioTokens?: number;
+  outputAudioTokens?: number;
+  inputTextTokens?: number;
+  outputTextTokens?: number;
+  cachedAudioTokens?: number;
+  cachedTextTokens?: number;
+  cachedTokens?: number;
+  totalTokens?: number;
 };
 
 export type AIRealtimeDiagnostic = {

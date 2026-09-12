@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   RealtimeProviderEvent,
+  RealtimePlaybackPosition,
   RealtimeSessionConfig,
   RealtimeVoiceProvider,
   RealtimeVoiceSession,
@@ -16,6 +17,7 @@ class MockRealtimeSession implements RealtimeVoiceSession {
     async (_callId: string, _result: unknown) => undefined,
   );
   interrupt = vi.fn(async () => undefined);
+  interruptPlayback?: (items: RealtimePlaybackPosition[]) => Promise<void>;
   close = vi.fn(async (_reason: string) => undefined);
 }
 
@@ -57,6 +59,7 @@ function setup(provider = new MockProvider()) {
     stopRecording: vi.fn(),
   } as unknown as TelephonyProvider;
   const emit = vi.fn(async () => undefined);
+  const writeAudio = vi.fn(async (audio: Uint8Array) => audio.byteLength / 48);
   const config: RealtimeSessionConfig = {
     callId: "call-1",
     tenantId: "tenant-1",
@@ -83,10 +86,10 @@ function setup(provider = new MockProvider()) {
     telephony,
     tools: new ToolExecutor(async () => ({ ok: true })),
     emit,
-    writeAudio: vi.fn(async () => undefined),
+    writeAudio,
     maxReconnects: 2,
   });
-  return { controller, emit, provider, telephony };
+  return { controller, emit, provider, telephony, writeAudio };
 }
 
 describe("VoiceSessionController", () => {
@@ -109,6 +112,30 @@ describe("VoiceSessionController", () => {
     expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({ type: "ai.interrupted", tenantId: "tenant-1" }),
     );
+  });
+
+  it("truncates every playback item at the actual written position", async () => {
+    const { controller, provider } = setup();
+    const interruptPlayback = vi.fn(async () => undefined);
+    provider.session.interruptPlayback = interruptPlayback;
+    await controller.start();
+    await provider.handler?.({
+      type: "audio.output",
+      audioBase64: Buffer.alloc(480).toString("base64"),
+      itemId: "item-1",
+    });
+    await provider.handler?.({
+      type: "audio.output",
+      audioBase64: Buffer.alloc(960).toString("base64"),
+      itemId: "item-2",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await provider.handler?.({ type: "speech.started", audioStartMs: 0 });
+    expect(interruptPlayback).toHaveBeenCalledWith([
+      { itemId: "item-1", playedAudioMs: 10 },
+      { itemId: "item-2", playedAudioMs: 20 },
+    ]);
+    expect(provider.session.interrupt).not.toHaveBeenCalled();
   });
 
   it("measures time from speech stop to the first emitted audio frame", async () => {

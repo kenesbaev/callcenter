@@ -68,6 +68,19 @@ export const gatewayEnvironmentSchema = z
       .min(65_536)
       .max(16_777_216)
       .default(4_194_304),
+    OPENAI_VOICE_LAB_ENABLED: booleanFromString.default(false),
+    OPENAI_VOICE_LAB_MAX_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(15)
+      .max(600)
+      .default(180),
+    OPENAI_VOICE_LAB_MAX_SESSIONS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(10)
+      .default(2),
     OPENAI_REALTIME_VAD_TYPE: z
       .enum(["server_vad", "semantic_vad"])
       .default("server_vad"),
@@ -184,6 +197,14 @@ export const gatewayEnvironmentSchema = z
         code: "custom",
         path: ["OPENAI_REALTIME_PROVIDER"],
         message: "Mock Realtime provider cannot be enabled in production",
+      });
+    }
+    if (value.OPENAI_VOICE_LAB_ENABLED && !value.OPENAI_REALTIME_ENABLED) {
+      context.addIssue({
+        code: "custom",
+        path: ["OPENAI_VOICE_LAB_ENABLED"],
+        message:
+          "OPENAI_REALTIME_ENABLED must be true when OPENAI_VOICE_LAB_ENABLED is true",
       });
     }
     if (value.ASTERISK_RTP_PORT_START > value.ASTERISK_RTP_PORT_END) {

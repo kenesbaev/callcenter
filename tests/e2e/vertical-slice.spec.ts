@@ -284,13 +284,13 @@ test("владелец приглашает оператора, а присут�
   await expect(page.getByText("Клиент создан")).toBeVisible();
 
   await page.getByRole("link", { name: "Команда" }).click();
-  await page.getByRole("button", { name: /Пригласить сотрудника/ }).click();
+  await page.getByRole("button", { name: "Добавить оператора" }).click();
   await page.getByLabel("E-mail приглашения").fill(operatorEmail);
   await page
     .getByRole("dialog", { name: "Приглашение сотрудника" })
     .getByText("Основной проект", { exact: true })
     .click();
-  await page.getByRole("button", { name: /Создать приглашение/ }).click();
+  await page.getByRole("button", { name: /Отправить приглашение/ }).click();
   const acceptanceUrl = await page
     .locator(".team-invite-secret code")
     .textContent();
@@ -301,10 +301,9 @@ test("владелец приглашает оператора, а присут�
     .click();
   await expect(page.locator(".team-invite-secret")).toHaveCount(0);
 
-  await page.getByRole("button", { name: /Пригласить сотрудника/ }).click();
+  await page.getByRole("button", { name: "Добавить администратора" }).click();
   await page.getByLabel("E-mail приглашения").fill(managerEmail);
-  await page.getByLabel("Роль приглашения").selectOption("tenant_manager");
-  await page.getByRole("button", { name: /Создать приглашение/ }).click();
+  await page.getByRole("button", { name: /Отправить приглашение/ }).click();
   const managerAcceptanceUrl = await page
     .locator(".team-invite-secret code")
     .textContent();

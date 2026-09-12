@@ -74,13 +74,16 @@ class Settings(BaseSettings):
         "gpt-realtime-2.1-mini,gpt-realtime-2.1,gpt-realtime-2,gpt-realtime-1.5"
     )
     openai_realtime_voice: str = "marin"
-    openai_realtime_reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
+    openai_realtime_reasoning_effort: Literal["none", "low", "medium", "high"] = "low"
     openai_realtime_vad_type: Literal["server_vad", "semantic_vad"] = "server_vad"
     openai_realtime_vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     openai_realtime_prefix_padding_ms: int = Field(default=300, ge=0, le=5000)
     openai_realtime_silence_duration_ms: int = Field(default=700, ge=200, le=5000)
     openai_realtime_idle_timeout_ms: int = Field(default=30_000, ge=5_000, le=120_000)
     openai_realtime_tool_timeout_seconds: float = Field(default=8.0, ge=0.5, le=30.0)
+    openai_voice_lab_enabled: bool = False
+    openai_voice_lab_max_seconds: int = Field(default=180, ge=15, le=600)
+    openai_voice_lab_max_sessions: int = Field(default=2, ge=1, le=10)
 
     karakalpak_experimental: bool = False
     enable_call_simulator: bool = False
@@ -149,6 +152,8 @@ class Settings(BaseSettings):
             and self.openai_api_key is None
         ):
             raise ValueError("OPENAI_API_KEY is required when OpenAI Realtime is enabled")
+        if self.openai_voice_lab_enabled and not self.openai_realtime_enabled:
+            raise ValueError("OPENAI_REALTIME_ENABLED is required when Voice Lab is enabled")
         if self.app_env == "production":
             if self.jwt_signing_key.get_secret_value() == "development-only-signing-key-change-me":
                 raise ValueError("JWT_SIGNING_KEY must be set in production")

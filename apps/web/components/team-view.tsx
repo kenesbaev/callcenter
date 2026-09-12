@@ -2,9 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  BarChart3,
   Ban,
+  Building2,
   CheckCircle2,
   Clock3,
+  Headphones,
   History,
   MailPlus,
   RefreshCw,
@@ -28,11 +31,39 @@ import type {
 import { QueryError, SectionSkeleton } from "@/components/query-state";
 
 const roleLabel: Record<string, string> = {
-  tenant_owner: "Владелец",
-  tenant_manager: "Менеджер",
+  tenant_owner: "Владелец компании",
+  tenant_manager: "Администратор компании",
   human_operator: "Оператор",
   analyst: "Аналитик",
 };
+
+type InviteRole = "tenant_manager" | "human_operator" | "analyst";
+
+const inviteRoleOptions: Array<{
+  value: InviteRole;
+  title: string;
+  description: string;
+  icon: typeof ShieldCheck;
+}> = [
+  {
+    value: "tenant_manager",
+    title: "Администратор",
+    description: "Настраивает AI, проекты и команду своей компании.",
+    icon: ShieldCheck,
+  },
+  {
+    value: "human_operator",
+    title: "Оператор",
+    description: "Принимает звонки и работает только с назначенными проектами.",
+    icon: Headphones,
+  },
+  {
+    value: "analyst",
+    title: "Аналитик",
+    description: "Смотрит звонки и отчёты без административных изменений.",
+    icon: BarChart3,
+  },
+];
 const statusLabel: Record<string, string> = {
   offline: "Офлайн",
   available: "Доступен",
@@ -82,9 +113,7 @@ export function TeamView() {
   const [selected, setSelected] = useState<TeamMember | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<
-    "tenant_manager" | "human_operator" | "analyst"
-  >("human_operator");
+  const [inviteRole, setInviteRole] = useState<InviteRole>("human_operator");
   const [inviteProjects, setInviteProjects] = useState<string[]>([]);
   const [inviteExpiresInDays, setInviteExpiresInDays] = useState(7);
   const [oneTimeLink, setOneTimeLink] = useState<string | null>(null);
@@ -312,6 +341,12 @@ export function TeamView() {
     createInvite.error ??
     invitationAction.error;
 
+  function openInvite(roleToInvite: InviteRole) {
+    setInviteRole(roleToInvite);
+    setInviteOpen(true);
+    setFeedback(null);
+  }
+
   if (team.isPending || me.isPending) return <SectionSkeleton />;
   if (team.isError)
     return (
@@ -327,14 +362,57 @@ export function TeamView() {
       <div className="page-heading row-between">
         <div>
           <h1>Команда</h1>
-          <p>Сотрудники, роли, проекты и присутствие операторов</p>
+          <p>Доступ сотрудников, роли, проекты и присутствие операторов</p>
         </div>
         {canManage && (
-          <Button onClick={() => setInviteOpen(true)}>
-            <MailPlus size={17} /> Пригласить сотрудника
-          </Button>
+          <div className="team-heading-actions">
+            <Button
+              onClick={() => openInvite("tenant_manager")}
+              variant="secondary"
+            >
+              <ShieldCheck size={17} /> Добавить администратора
+            </Button>
+            <Button onClick={() => openInvite("human_operator")}>
+              <Headphones size={17} /> Добавить оператора
+            </Button>
+          </div>
         )}
       </div>
+
+      <section className="team-role-overview panel" aria-label="Уровни доступа">
+        <article>
+          <span className="team-role-icon platform">
+            <ShieldCheck size={18} />
+          </span>
+          <div>
+            <small>Платформа</small>
+            <strong>Super admin K-Line</strong>
+            <p>
+              Управляет компаниями и платформой. Не создаётся внутри клиента.
+            </p>
+          </div>
+        </article>
+        <article>
+          <span className="team-role-icon company">
+            <Building2 size={18} />
+          </span>
+          <div>
+            <small>Компания</small>
+            <strong>Владелец и администратор</strong>
+            <p>Настраивают свою компанию, AI, проекты и сотрудников.</p>
+          </div>
+        </article>
+        <article>
+          <span className="team-role-icon operator">
+            <Headphones size={18} />
+          </span>
+          <div>
+            <small>Рабочее место</small>
+            <strong>Оператор</strong>
+            <p>Обрабатывает звонки и задачи назначенных проектов.</p>
+          </div>
+        </article>
+      </section>
 
       {(feedback || mutationError) && (
         <div
@@ -413,8 +491,8 @@ export function TeamView() {
               value={role}
             >
               <option value="">Все роли</option>
-              <option value="tenant_owner">Владелец</option>
-              <option value="tenant_manager">Менеджер</option>
+              <option value="tenant_owner">Владелец компании</option>
+              <option value="tenant_manager">Администратор компании</option>
               <option value="human_operator">Оператор</option>
               <option value="analyst">Аналитик</option>
             </select>
@@ -621,7 +699,7 @@ export function TeamView() {
 
       {selected && (
         <div
-          className="task-modal-backdrop"
+          className="task-modal-backdrop team-modal-backdrop"
           onMouseDown={() => setSelected(null)}
           role="presentation"
         >
@@ -732,7 +810,9 @@ export function TeamView() {
                     }
                     value={selected.role}
                   >
-                    <option value="tenant_manager">Менеджер</option>
+                    <option value="tenant_manager">
+                      Администратор компании
+                    </option>
                     <option value="human_operator">Оператор</option>
                     <option value="analyst">Аналитик</option>
                   </select>
@@ -758,7 +838,7 @@ export function TeamView() {
                   <h3>Передача владения компанией</h3>
                   <p className="panel-subtitle">
                     Новый владелец получит полный доступ, а ваша роль станет
-                    ролью менеджера.
+                    ролью администратора компании.
                   </p>
                   <Button
                     disabled={ownershipMutation.isPending}
@@ -838,7 +918,7 @@ export function TeamView() {
 
       {inviteOpen && (
         <div
-          className="task-modal-backdrop"
+          className="task-modal-backdrop team-modal-backdrop"
           onMouseDown={() => setInviteOpen(false)}
           role="presentation"
         >
@@ -855,8 +935,9 @@ export function TeamView() {
           >
             <header>
               <div>
-                <span>Новый сотрудник</span>
-                <h2>Приглашение в K-Line</h2>
+                <span>Доступ в компанию</span>
+                <h2>Добавить сотрудника</h2>
+                <p>Выберите роль, укажите e-mail и назначьте проекты.</p>
               </div>
               <button
                 aria-label="Закрыть приглашение"
@@ -867,48 +948,70 @@ export function TeamView() {
                 <X size={17} />
               </button>
             </header>
-            <label>
-              <span>Рабочий e-mail</span>
-              <input
-                aria-label="E-mail приглашения"
-                onChange={(event) => setInviteEmail(event.target.value)}
-                required
-                type="email"
-                value={inviteEmail}
-              />
-            </label>
-            <label>
-              <span>Роль</span>
-              <select
+            <section className="team-invite-role-section">
+              <span className="team-invite-section-label">Кого добавляем?</span>
+              <div
+                className="team-invite-role-grid"
+                role="radiogroup"
                 aria-label="Роль приглашения"
-                onChange={(event) =>
-                  setInviteRole(event.target.value as typeof inviteRole)
-                }
-                value={inviteRole}
               >
-                <option value="human_operator">Оператор</option>
-                <option value="tenant_manager">Менеджер</option>
-                <option value="analyst">Аналитик</option>
-              </select>
-            </label>
-            <label>
-              <span>Срок действия</span>
-              <select
-                aria-label="Срок действия приглашения"
-                onChange={(event) =>
-                  setInviteExpiresInDays(Number(event.target.value))
-                }
-                value={inviteExpiresInDays}
-              >
-                <option value={1}>1 день</option>
-                <option value={3}>3 дня</option>
-                <option value={7}>7 дней</option>
-                <option value={14}>14 дней</option>
-                <option value={30}>30 дней</option>
-              </select>
-            </label>
+                {inviteRoleOptions.map((option) => {
+                  const Icon = option.icon;
+                  const checked = inviteRole === option.value;
+                  return (
+                    <button
+                      aria-checked={checked}
+                      className={checked ? "selected" : ""}
+                      key={option.value}
+                      onClick={() => setInviteRole(option.value)}
+                      role="radio"
+                      type="button"
+                    >
+                      <span>
+                        <Icon size={18} />
+                      </span>
+                      <strong>{option.title}</strong>
+                      <small>{option.description}</small>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+            <div className="team-invite-basics">
+              <label>
+                <span>Рабочий e-mail</span>
+                <input
+                  aria-label="E-mail приглашения"
+                  autoFocus
+                  onChange={(event) => setInviteEmail(event.target.value)}
+                  placeholder="employee@company.uz"
+                  required
+                  type="email"
+                  value={inviteEmail}
+                />
+              </label>
+              <label>
+                <span>Ссылка действует</span>
+                <select
+                  aria-label="Срок действия приглашения"
+                  onChange={(event) =>
+                    setInviteExpiresInDays(Number(event.target.value))
+                  }
+                  value={inviteExpiresInDays}
+                >
+                  <option value={1}>1 день</option>
+                  <option value={3}>3 дня</option>
+                  <option value={7}>7 дней</option>
+                  <option value={14}>14 дней</option>
+                  <option value={30}>30 дней</option>
+                </select>
+              </label>
+            </div>
             <fieldset>
-              <legend>Проекты</legend>
+              <legend>
+                Проекты
+                <span>Можно изменить после принятия приглашения</span>
+              </legend>
               {projects.data?.items.map((project) => (
                 <label key={project.id}>
                   <input
@@ -938,7 +1041,7 @@ export function TeamView() {
                 Отмена
               </Button>
               <Button disabled={createInvite.isPending} type="submit">
-                <CheckCircle2 size={16} /> Создать приглашение
+                <CheckCircle2 size={16} /> Отправить приглашение
               </Button>
             </div>
           </form>

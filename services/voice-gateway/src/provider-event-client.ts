@@ -23,6 +23,7 @@ export type AiSessionConfiguration = {
   voice: string;
   language: string;
   instructions: string;
+  safetyIdentifier?: string;
   tools: Array<{
     name: string;
     description: string;

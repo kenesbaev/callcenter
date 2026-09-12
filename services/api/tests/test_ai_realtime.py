@@ -10,9 +10,12 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
 from httpx import AsyncClient
+from pydantic import SecretStr
 
 from teamora_api.config import get_settings
+from teamora_api.routers import ai_realtime as ai_realtime_router
 from teamora_api.schemas.call_flows import normalize_language_code
 from teamora_api.schemas.operators import AiOperatorCreate
 
@@ -108,6 +111,10 @@ async def test_ai_realtime_session_event_transcript_usage_and_idempotency(
     assert configuration["model"] == "mock-realtime-deterministic"
     assert configuration["vad"]["type"] == "server_vad"
     assert "request_human_transfer" in [item["name"] for item in configuration["tools"]]
+    assert "wait_for_user" in [item["name"] for item in configuration["tools"]]
+    assert configuration["safetyIdentifier"].startswith("cc_")
+    assert "# Silence and background audio" in configuration["instructions"]
+    assert "# Unclear audio and exact details" in configuration["instructions"]
     session_id = configuration["sessionId"]
 
     event_id = str(uuid4())
@@ -129,6 +136,24 @@ async def test_ai_realtime_session_event_transcript_usage_and_idempotency(
     assert duplicate.status_code == 202, duplicate.text
     assert duplicate.json()["duplicate"] is True
     assert duplicate.json()["state_version"] == first.json()["state_version"]
+
+    wait_result = await signed_post(
+        client,
+        "/api/v1/webhooks/ai-realtime/tools",
+        {
+            "tenantId": tenant_id,
+            "projectId": call["project_id"],
+            "callId": call["id"],
+            "sessionId": session_id,
+            "toolCallId": "wait-for-user-1",
+            "name": "wait_for_user",
+            "arguments": {},
+            "idempotencyKey": "wait-for-user-idempotency-1",
+            "correlationId": correlation_id,
+        },
+    )
+    assert wait_result.status_code == 200, wait_result.text
+    assert wait_result.json() == {"ok": True, "waiting": True}
 
     transcript_event = {
         **event,
@@ -153,6 +178,8 @@ async def test_ai_realtime_session_event_transcript_usage_and_idempotency(
             "input_audio_tokens": 12,
             "output_audio_tokens": 8,
             "input_text_tokens": 3,
+            "cached_audio_tokens": 4,
+            "cached_text_tokens": 2,
         },
     }
     response = await signed_post(client, "/api/v1/webhooks/ai-realtime/events", usage_event)
@@ -193,8 +220,58 @@ async def test_ai_realtime_session_event_transcript_usage_and_idempotency(
     details = response.json()
     assert details["session"]["state"] == "active"
     assert len(details["events"]) == 4
-    assert len(details["usage"]) == 3
+    assert len(details["usage"]) == 5
+    assert {item["metric"] for item in details["usage"]} >= {
+        "openai_realtime_cached_audio_tokens",
+        "openai_realtime_cached_text_tokens",
+    }
     assert all(item["pricing_available"] is False for item in details["usage"])
+
+
+async def test_voice_lab_ticket_is_short_lived_scoped_and_never_contains_provider_key(
+    client: AsyncClient,
+    unique_suffix: str,
+    register: Register,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth, csrf = await register(client, unique_suffix)
+    settings = get_settings().model_copy(
+        update={
+            "openai_realtime_enabled": True,
+            "openai_realtime_provider": "mock",
+            "openai_voice_lab_enabled": True,
+            "openai_voice_lab_max_seconds": 90,
+            "gateway_service_token": SecretStr("voice-lab-test-secret-at-least-32-characters"),
+        }
+    )
+    monkeypatch.setattr(ai_realtime_router, "get_settings", lambda: settings)
+
+    status = await client.get("/api/v1/ai-realtime/status")
+    assert status.status_code == 200, status.text
+    assert status.json()["configured"] is True
+    assert status.json()["voice_lab_enabled"] is True
+    assert status.json()["voice_lab_max_seconds"] == 90
+
+    response = await client.post(
+        "/api/v1/ai-realtime/lab/ticket",
+        headers={"X-CSRF-Token": csrf},
+        json={"language": "uz"},
+    )
+    assert response.status_code == 200, response.text
+    issued = response.json()
+    assert issued["websocket_url"] == "/gateway/voice-lab/ws"
+    assert issued["provider"] == "mock"
+    assert issued["paid_provider"] is False
+    assert issued["max_seconds"] == 90
+    encoded, signature = issued["token"].split(".")
+    assert signature
+    payload = json.loads(base64.urlsafe_b64decode(encoded + "=="))
+    assert payload["aud"] == "teamora-voice-lab"
+    assert payload["tenant_id"] == auth["tenant"]["id"]
+    assert payload["sub"] == auth["user"]["id"]
+    assert payload["language"] == "uz"
+    assert payload["exp"] - int(time.time()) <= 60
+    assert "openai" not in json.dumps(payload).lower()
 
 
 async def test_ai_realtime_tenant_scope_and_language_codes_are_distinct(

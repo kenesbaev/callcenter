@@ -144,14 +144,14 @@ describe("team workspace", () => {
   it("lets owner create invitation and exposes one-time link", async () => {
     renderTeam();
     fireEvent.click(
-      await screen.findByRole("button", { name: /Пригласить сотрудника/ }),
+      await screen.findByRole("button", { name: /Добавить оператора/ }),
     );
     fireEvent.change(screen.getByLabelText("E-mail приглашения"), {
       target: { value: "new@example.com" },
     });
     fireEvent.click(screen.getByText("Продажи", { selector: "label" }));
     fireEvent.click(
-      screen.getByRole("button", { name: /Создать приглашение/ }),
+      screen.getByRole("button", { name: /Отправить приглашение/ }),
     );
     expect(
       await screen.findByText("Одноразовая тестовая ссылка"),
@@ -159,6 +159,31 @@ describe("team workspace", () => {
     expect(
       screen.getByText(/accept-invitation\?token=once/),
     ).toBeInTheDocument();
+  });
+
+  it("opens the administrator preset with an explicit company role", async () => {
+    renderTeam();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Добавить администратора/ }),
+    );
+    expect(
+      screen.getByRole("radio", { name: /Администратор/ }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.change(screen.getByLabelText("E-mail приглашения"), {
+      target: { value: "admin@example.com" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Отправить приглашение/ }),
+    );
+    await waitFor(() =>
+      expect(apiRequestMock).toHaveBeenCalledWith(
+        "/team/invitations",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"role":"tenant_manager"'),
+        }),
+      ),
+    );
   });
 
   it("shows role-based controls to manager but protects owner policy in backend", async () => {
@@ -174,7 +199,7 @@ describe("team workspace", () => {
     renderTeam("analyst");
     expect(await screen.findByText("Алексей Оператор")).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /Пригласить сотрудника/ }),
+      screen.queryByRole("button", { name: /Добавить оператора/ }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("tab", { name: /Приглашения/ }),

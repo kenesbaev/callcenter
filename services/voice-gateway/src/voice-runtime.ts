@@ -93,6 +93,9 @@ export class VoiceRuntime {
       vad,
       inputAudioFormat: { type: "audio/pcm", rate: 24_000, channels: 1 },
       outputAudioFormat: { type: "audio/pcm", rate: 24_000, channels: 1 },
+      ...(configuration.safetyIdentifier
+        ? { safetyIdentifier: configuration.safetyIdentifier }
+        : {}),
       ...(configuration.reasoningEffort
         ? { reasoningEffort: configuration.reasoningEffort }
         : {}),
@@ -217,6 +220,7 @@ const knownTools = new Set([
   "submit_call_result",
   "request_human_transfer",
   "end_conversation",
+  "wait_for_user",
   "find_customer",
   "create_customer",
   "create_lead",

@@ -8,5 +8,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
+    pool: "threads",
+    maxWorkers: 4,
   },
 });

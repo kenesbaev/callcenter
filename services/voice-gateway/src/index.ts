@@ -12,6 +12,7 @@ import { RtpDiagnosticAdapter } from "./rtp-diagnostic.js";
 import { RtpMediaPool } from "./rtp-media-pool.js";
 import { VoiceRuntime } from "./voice-runtime.js";
 import { runLocalAiDiagnostic } from "./local-ai-diagnostic.js";
+import { attachVoiceLab } from "./voice-lab.js";
 
 const parsed = gatewayEnvironmentSchema.safeParse(process.env);
 if (!parsed.success) {
@@ -167,6 +168,11 @@ const server = createServer(async (request, response) => {
             : "configured_live_verification_required"
           : "unavailable",
         ai_session: voiceRuntime?.status() ?? "unavailable",
+        voice_lab: config.OPENAI_VOICE_LAB_ENABLED
+          ? config.OPENAI_REALTIME_PROVIDER === "mock"
+            ? "mock_local_verification_available"
+            : "configured_live_verification_required"
+          : "disabled",
         asterisk: telephonyProvider
           ? "configured_live_verification_required"
           : "unavailable",
@@ -191,6 +197,27 @@ const server = createServer(async (request, response) => {
   );
 });
 
+const voiceLab = realtimeProvider
+  ? attachVoiceLab(server, {
+      enabled: config.OPENAI_VOICE_LAB_ENABLED,
+      provider: realtimeProvider,
+      providerName: config.OPENAI_REALTIME_PROVIDER,
+      model: config.OPENAI_REALTIME_MODEL,
+      voice: config.OPENAI_REALTIME_VOICE,
+      ...(config.OPENAI_REALTIME_REASONING_EFFORT === "none"
+        ? {}
+        : { reasoningEffort: config.OPENAI_REALTIME_REASONING_EFFORT }),
+      tokenSecret: config.GATEWAY_SERVICE_TOKEN,
+      maxDurationSeconds: config.OPENAI_VOICE_LAB_MAX_SECONDS,
+      maxSessions: config.OPENAI_VOICE_LAB_MAX_SESSIONS,
+      maxSocketMessageBytes: Math.min(
+        config.OPENAI_REALTIME_MAX_MESSAGE_BYTES,
+        32_768,
+      ),
+      maxSocketQueueBytes: config.OPENAI_REALTIME_MAX_QUEUE_BYTES,
+    })
+  : undefined;
+
 server.listen(config.GATEWAY_PORT, "0.0.0.0", () =>
   logger.info(
     {
@@ -213,6 +240,7 @@ async function shutdown(signal: string): Promise<void> {
   server.close();
   await ariListener?.stop();
   await voiceRuntime?.shutdown("gateway_shutdown");
+  await voiceLab?.close();
   await mediaAdapter?.stop();
   await realtimeProvider?.shutdown();
   logger.info("graceful shutdown complete");

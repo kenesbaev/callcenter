@@ -1,6 +1,6 @@
 # OpenAI Realtime Voice AI
 
-Contract review date: **2026-08-12**. K-Line uses the current server-to-server
+Contract review date: **2026-09-10**. K-Line uses the current server-to-server
 WebSocket contract documented by OpenAI, not the retired preview contract:
 
 - [Realtime API](https://developers.openai.com/api/docs/guides/realtime)
@@ -38,6 +38,8 @@ Configuration is centralized:
 - `OPENAI_REALTIME_VOICE`
 - `OPENAI_REALTIME_REASONING_EFFORT`
 - VAD, timeout, queue and message-size settings
+- `OPENAI_VOICE_LAB_ENABLED=false` by default
+- `OPENAI_VOICE_LAB_MAX_SECONDS` and `OPENAI_VOICE_LAB_MAX_SESSIONS`
 - `OPENAI_API_KEY` only in server secrets
 
 The default configured model is `gpt-realtime-2.1`, but startup rejects a model
@@ -51,6 +53,40 @@ The reviewed GA contract uses `session.update`, `input_audio_buffer.append`,
 `response.output_audio.delta`, `response.cancel` and
 `conversation.item.truncate`. Audio playback and truncation accounting remain a
 server-side Gateway responsibility. The legacy preview header/contract is not used.
+
+The Gateway does not mark a provider session ready when the TCP/WebSocket socket
+opens. It waits for the provider's `session.updated` acknowledgement. Rejection,
+close, timeout and invalid provider events therefore fail the setup instead of
+allowing audio into an unconfirmed configuration.
+
+## Browser Voice AI Lab
+
+`/app/language-lab` now provides a bounded microphone conversation for tenant
+owners and managers. It is an AI/media test before SIP is purchased; it is not a
+telephone call and does not prove Asterisk, SIP registration, DID routing or RTP
+interoperability.
+
+The browser never receives `OPENAI_API_KEY`. FastAPI authorizes
+`POST /ai-realtime/lab/ticket` and issues a signed, one-minute, tenant/user-scoped
+ticket. The ticket is sent as a WebSocket subprotocol to
+`/gateway/voice-lab/ws`, accepted once, checked against the same browser origin,
+and never placed in the URL. The Gateway owns the OpenAI WebSocket and relays only
+bounded PCM16LE/24 kHz audio plus sanitized events. It enforces message size,
+audio rate, browser backpressure, concurrent-session and duration limits.
+
+The lab starts disabled. For a no-cost local media-path test use the mock provider
+in development/test. For OpenAI, enabling the start button requires an explicit
+paid-session acknowledgement; the API checks the exact confirmation again. A
+successful mock conversation proves only the browser-to-Gateway protocol,
+microphone conversion, playback, transcript relay and interruption mechanics.
+A successful live lab proves the configured OpenAI account/model/voice path, but
+still does not prove SIP calling.
+
+Browser playback tracks every queued provider item. When the user speaks or clicks
+“Прервать ответ AI”, the browser stops local sources immediately and sends played
+positions for all affected items. The Gateway emits one `response.cancel` followed
+by a `conversation.item.truncate` per item, preventing unheard audio from remaining
+in the provider conversation context.
 
 ## Session and audio lifecycle
 
